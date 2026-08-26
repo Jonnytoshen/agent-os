@@ -6,7 +6,7 @@ import 'dotenv/config';
 import { join } from 'node:path';
 
 import { buildTaskCard, ThrottledCardUpdater } from './im/card';
-import { Bot, startBot } from './im/lark';
+import { AgentOSBot, type MessageReceiver } from './im/lark';
 import { extractResourceKeys, resolveMentions } from './im/message-parser';
 
 const appId = process.env.BOT_A_APP_ID;
@@ -32,7 +32,7 @@ const DEMO_STEPS = [
   '整理执行结果',
 ];
 
-async function runCardDemo(bot: Bot, cardId: string, resolved: string): Promise<void> {
+async function runCardDemo(bot: AgentOSBot, cardId: string, resolved: string): Promise<void> {
   const activities: string[] = [];
   const updater = new ThrottledCardUpdater(async (card) => {
     await bot.updateCard(cardId, card);
@@ -67,60 +67,58 @@ async function runCardDemo(bot: Bot, cardId: string, resolved: string): Promise<
   console.log('[卡片] 任务完成');
 }
 
-startBot({
-  appId,
-  appSecret,
-  onMessage: async (msg, bot) => {
-    const resolved = resolveMentions(msg.text, msg.mentions);
-    console.log(
-      `[收到] chat=${msg.chatId} threadId=${msg.threadId} rootId=${msg.rootId} sender=${msg.senderOpenId}`,
-    );
-    console.log(`  原文: ${msg.text}`);
-    console.log(`  还原: ${resolved}`);
-    console.log(
-      `  mentions: ${msg.mentions.map((m) => `${m.key}=${m.name}(${m.openId})`).join(', ') || '(无)'}`,
-    );
+const onMessage: MessageReceiver = async (msg, bot) => {
+  const resolved = resolveMentions(msg.text, msg.mentions);
+  console.log(
+    `[收到] chat=${msg.chatId} threadId=${msg.threadId} rootId=${msg.rootId} sender=${msg.senderOpenId}`,
+  );
+  console.log(`  原文: ${msg.text}`);
+  console.log(`  还原: ${resolved}`);
+  console.log(
+    `  mentions: ${msg.mentions.map((m) => `${m.key}=${m.name}(${m.openId})`).join(', ') || '(无)'}`,
+  );
 
-    // 图片/文件下载
-    const resources = extractResourceKeys(msg.messageType, msg.rawContent);
-    for (const res of resources) {
-      try {
-        const savePath = await bot.downloadResource(
-          msg.messageId,
-          res.key,
-          res.type,
-          join('data', 'downloads'),
-          res.fileName,
-        );
-        console.log(`  [下载] ${res.type} → ${savePath}`);
-      } catch (e) {
-        console.error(`  [下载失败] ${res.key}:`, (e as Error).message);
-      }
+  // 图片/文件下载
+  const resources = extractResourceKeys(msg.messageType, msg.rawContent);
+  for (const res of resources) {
+    try {
+      const savePath = await bot.downloadResource(
+        msg.messageId,
+        res.key,
+        res.type,
+        join('data', 'downloads'),
+        res.fileName,
+      );
+      console.log(`  [下载] ${res.type} → ${savePath}`);
+    } catch (e) {
+      console.error(`  [下载失败] ${res.key}:`, (e as Error).message);
     }
+  }
 
-    // 先回复一张卡片，后续更新复用同一个 message_id。
-    const hasThread = !!msg.threadId || !!msg.rootId;
-    const cardId = await bot.replyCard(
-      msg.messageId,
-      buildTaskCard({
-        title: 'Agent OS 模拟任务',
-        status: 'running',
-        progress: 0,
-        detail: '正在准备任务环境',
-      }),
-      hasThread,
-    );
+  // 先回复一张卡片，后续更新复用同一个 message_id。
+  const hasThread = !!msg.threadId || !!msg.rootId;
+  const cardId = await bot.replyCard(
+    msg.messageId,
+    buildTaskCard({
+      title: 'Agent OS 模拟任务',
+      status: 'running',
+      progress: 0,
+      detail: '正在准备任务环境',
+    }),
+    hasThread,
+  );
 
-    if (!cardId) {
-      console.error('[卡片] 响应里没有 message_id，无法继续更新');
-      return;
-    }
+  if (!cardId) {
+    console.error('[卡片] 响应里没有 message_id，无法继续更新');
+    return;
+  }
 
-    console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
+  console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
 
-    // 让事件回调尽快返回，后续模拟更新在后台继续。
-    void runCardDemo(bot, cardId, resolved).catch((error) => {
-      console.error('[卡片] 演示失败:', (error as Error).message);
-    });
-  },
-});
+  // 让事件回调尽快返回，后续模拟更新在后台继续。
+  void runCardDemo(bot, cardId, resolved).catch((error) => {
+    console.error('[卡片] 演示失败:', (error as Error).message);
+  });
+};
+
+new AgentOSBot({ appId, appSecret, onMessage });

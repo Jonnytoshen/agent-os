@@ -22,28 +22,144 @@ export interface IncomingMessage {
   rawContent: string;
 }
 
-export interface BotOptions {
+export interface AgentOSBotOptions {
   appId: string;
   appSecret: string;
-  onMessage: (msg: IncomingMessage, bot: Bot) => Promise<void>;
+  onMessage?: MessageReceiver;
 }
 
-export interface Bot {
-  client: Lark.Client;
-  reply: (messageId: string, text: string, replyInThread?: boolean) => Promise<string | undefined>;
-  replyCard: (
+export type MessageReceiver = (msg: IncomingMessage, bot: AgentOSBot) => Promise<void>;
+
+/**
+ * 启动一个飞书自建应用 Bot。
+ *
+ * @param options 配置项
+ * @param options.appId 飞书自建应用的 App ID
+ * @param options.appSecret 飞书自建应用的 App Secret
+ * @param options.onMessage 可选的消息接收器，收到消息时会被调用
+ */
+export class AgentOSBot {
+  readonly client: Lark.Client;
+
+  constructor(options: AgentOSBotOptions) {
+    const { appId, appSecret, onMessage } = options;
+
+    // `Lark.Client` 管出。所有主动调 API 的动作——发消息、回消息、以后的传图片、改卡片都走它。
+    // 它拿着 App ID 和 Secret 自己维护鉴权 token，不用操心过期刷新。
+    this.client = new Lark.Client({ appId, appSecret });
+
+    // `EventDispatcher` 管分发。长连接上下来的事件五花八门，dispatcher 按事件名路由到对应的处理函数。
+    const dispatcher = new Lark.EventDispatcher({}).register({
+      'im.message.receive_v1': async (data) => {
+        const m = data.message;
+        const msg: IncomingMessage = {
+          messageId: m.message_id,
+          chatId: m.chat_id,
+          chatType: m.chat_type,
+          messageType: m.message_type,
+          text: extractText(m.message_type, m.content),
+          rootId: m.root_id ?? '',
+          threadId: m.thread_id ?? '',
+          senderOpenId: data.sender.sender_id?.open_id ?? '',
+          mentions: parseMentions(m.mentions),
+          rawContent: m.content,
+        };
+        if (onMessage) {
+          await onMessage(msg, this);
+        }
+      },
+    });
+
+    // `Lark.WSClient` 管进。它负责建立并维持那条 `WebSocket` 长连接，断了自动重连。
+    const wsClient = new Lark.WSClient({ appId, appSecret });
+    wsClient.start({ eventDispatcher: dispatcher });
+  }
+
+  /**
+   * 回复消息（文本）。
+   *
+   * @param messageId 要回复的消息 ID
+   * @param text 回复的文本内容
+   * @param replyInThread 是否在消息线程中回复
+   * @returns 回复的消息 ID（如果有）
+   */
+  async reply(messageId: string, text: string, replyInThread = false): Promise<string | undefined> {
+    const res = await this.client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: {
+        msg_type: 'text',
+        content: JSON.stringify({ text }),
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    return res.data?.message_id;
+  }
+
+  /**
+   * 回复卡片消息。
+   *
+   * @param messageId 要回复的消息 ID
+   * @param card 卡片内容
+   * @param replyInThread 是否在消息线程中回复
+   * @returns 回复的消息 ID（如果有）
+   */
+  async replyCard(
     messageId: string,
     card: CardJson,
-    replyInThread?: boolean,
-  ) => Promise<string | undefined>;
-  updateCard: (messageId: string, card: CardJson) => Promise<void>;
-  downloadResource: (
+    replyInThread = false,
+  ): Promise<string | undefined> {
+    const res = await this.client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: {
+        msg_type: 'interactive',
+        content: JSON.stringify(card),
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    return res.data?.message_id;
+  }
+
+  /**
+   * 更新卡片消息。
+   *
+   * @param messageId 要更新的消息 ID
+   * @param card 新的卡片内容
+   */
+  async updateCard(messageId: string, card: CardJson): Promise<void> {
+    await this.client.im.v1.message.patch({
+      path: { message_id: messageId },
+      data: { content: JSON.stringify(card) },
+    });
+  }
+
+  /**
+   * 下载图片/文件资源到本地。
+   *
+   * @param messageId 消息 ID
+   * @param fileKey 资源 key（image_key / file_key）
+   * @param type 资源类型
+   * @param saveDir 保存目录
+   * @param fileName 原始文件名（可选）
+   * @returns 本地保存路径
+   */
+  async downloadResource(
     messageId: string,
     fileKey: string,
     type: 'image' | 'file',
     saveDir: string,
     fileName?: string,
-  ) => Promise<string>;
+  ): Promise<string> {
+    const res = await this.client.im.v1.messageResource.get({
+      path: { message_id: messageId, file_key: fileKey },
+      params: { type },
+    });
+    const contentType = getHeader(res.headers, 'content-type');
+    const extension = resourceExtension(type, fileName, contentType);
+    const savePath = join(saveDir, `${fileKey}.${extension}`);
+    await mkdir(saveDir, { recursive: true });
+    await res.writeFile(savePath);
+    return savePath;
+  }
 }
 
 const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
@@ -90,86 +206,4 @@ function extractText(messageType: string, content: string): string {
       .trim();
   }
   return '';
-}
-
-export function startBot(opts: BotOptions): Bot {
-  const { appId, appSecret, onMessage } = opts;
-
-  // `Lark.Client` 管出。所有主动调 API 的动作——发消息、回消息、以后的传图片、改卡片都走它。
-  // 它拿着 App ID 和 Secret 自己维护鉴权 token，不用操心过期刷新。
-  const client = new Lark.Client({ appId, appSecret });
-
-  const bot: Bot = {
-    client,
-    // 回复消息（文本）
-    async reply(messageId, text, replyInThread = false) {
-      const res = await client.im.v1.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
-      return res.data?.message_id;
-    },
-    // 回复卡片消息
-    async replyCard(messageId, card, replyInThread = false) {
-      const res = await client.im.v1.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
-      return res.data?.message_id;
-    },
-    // 更新卡片消息
-    async updateCard(messageId, card) {
-      await client.im.v1.message.patch({
-        path: { message_id: messageId },
-        data: { content: JSON.stringify(card) },
-      });
-    },
-    // 下载图片/文件资源到本地
-    async downloadResource(messageId, fileKey, type, saveDir, fileName) {
-      const res = await client.im.v1.messageResource.get({
-        path: { message_id: messageId, file_key: fileKey },
-        params: { type },
-      });
-      const contentType = getHeader(res.headers, 'content-type');
-      const extension = resourceExtension(type, fileName, contentType);
-      const savePath = join(saveDir, `${fileKey}.${extension}`);
-      await mkdir(saveDir, { recursive: true });
-      await res.writeFile(savePath);
-      return savePath;
-    },
-  };
-
-  // `EventDispatcher` 管分发。长连接上下来的事件五花八门，dispatcher 按事件名路由到对应的处理函数。
-  const dispatcher = new Lark.EventDispatcher({}).register({
-    'im.message.receive_v1': async (data) => {
-      const m = data.message;
-      const msg: IncomingMessage = {
-        messageId: m.message_id,
-        chatId: m.chat_id,
-        chatType: m.chat_type,
-        messageType: m.message_type,
-        text: extractText(m.message_type, m.content),
-        rootId: m.root_id ?? '',
-        threadId: m.thread_id ?? '',
-        senderOpenId: data.sender.sender_id?.open_id ?? '',
-        mentions: parseMentions(m.mentions),
-        rawContent: m.content,
-      };
-      await onMessage(msg, bot);
-    },
-  });
-
-  // `Lark.WSClient` 管进。它负责建立并维持那条 `WebSocket` 长连接，断了自动重连。
-  const wsClient = new Lark.WSClient({ appId, appSecret });
-  wsClient.start({ eventDispatcher: dispatcher });
-
-  return bot;
 }

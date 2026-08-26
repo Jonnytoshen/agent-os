@@ -35,7 +35,7 @@
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,mjs,cjs}": "pnpm run lint",
-    "*": "pnpm run fmt -- --no-error-on-unmatched-pattern"
+    "*": "pnpm run fmt --no-error-on-unmatched-pattern"
   },
   "engines": {
     "node": ">=22"

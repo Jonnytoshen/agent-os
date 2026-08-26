@@ -6,6 +6,7 @@ import { extname, join } from 'node:path';
 
 import * as Lark from '@larksuiteoapi/node-sdk';
 
+import type { CardJson } from './card';
 import { parseMentions, type Mention } from './message-parser';
 
 export interface IncomingMessage {
@@ -30,6 +31,12 @@ export interface BotOptions {
 export interface Bot {
   client: Lark.Client;
   reply: (messageId: string, text: string, replyInThread?: boolean) => Promise<string | undefined>;
+  replyCard: (
+    messageId: string,
+    card: CardJson,
+    replyInThread?: boolean,
+  ) => Promise<string | undefined>;
+  updateCard: (messageId: string, card: CardJson) => Promise<void>;
   downloadResource: (
     messageId: string,
     fileKey: string,
@@ -94,6 +101,7 @@ export function startBot(opts: BotOptions): Bot {
 
   const bot: Bot = {
     client,
+    // 回复消息（文本）
     async reply(messageId, text, replyInThread = false) {
       const res = await client.im.v1.message.reply({
         path: { message_id: messageId },
@@ -105,6 +113,26 @@ export function startBot(opts: BotOptions): Bot {
       });
       return res.data?.message_id;
     },
+    // 回复卡片消息
+    async replyCard(messageId, card, replyInThread = false) {
+      const res = await client.im.v1.message.reply({
+        path: { message_id: messageId },
+        data: {
+          msg_type: 'interactive',
+          content: JSON.stringify(card),
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+      return res.data?.message_id;
+    },
+    // 更新卡片消息
+    async updateCard(messageId, card) {
+      await client.im.v1.message.patch({
+        path: { message_id: messageId },
+        data: { content: JSON.stringify(card) },
+      });
+    },
+    // 下载图片/文件资源到本地
     async downloadResource(messageId, fileKey, type, saveDir, fileName) {
       const res = await client.im.v1.messageResource.get({
         path: { message_id: messageId, file_key: fileKey },

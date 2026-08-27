@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.2.0 (2026-08-27)
+
+### 🚀 Features
+
+* **core:** add session management and chat commands ([81483ae](https://github.com/Jonnytoshen/agent-os/commit/81483ae441834da773fe6f8d80a5961085916bfe))
+* **core:** persist sessions to disk with JsonSessionStore ([985f756](https://github.com/Jonnytoshen/agent-os/commit/985f7563657c92074adfdf6b7579741fb16eb5b5))
 ## 0.1.0 (2026-08-26)
 
 ### 🚀 Features

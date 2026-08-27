@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { parseCommand } from './core/command-parser';
 import { type Session, SessionManager } from './core/session-manager';
+import { JsonSessionStore } from './core/session-store';
 import { buildTaskCard, ThrottledCardUpdater } from './im/card';
 import { AgentOSBot, type MessageReceiver } from './im/lark';
 import { extractResourceKeys, resolveMentions } from './im/message-parser';
@@ -21,7 +22,11 @@ if (!appId || !appSecret) {
 
 console.log('Agent OS 启动，正在建立飞书长连接…');
 
-const sessions = new SessionManager();
+const sessions = await SessionManager.open({
+  store: new JsonSessionStore(join('data', 'sessions.json')),
+});
+console.log(`[会话] 已恢复 ${sessions.size} 个会话`);
+
 const activeRuns = new Map<string, AbortController>();
 
 function wait(ms: number, signal: AbortSignal): Promise<boolean> {
@@ -112,16 +117,16 @@ function formatSessionStatus(session: Session): string {
   ].join('\n');
 }
 
-function markSessionIdle(sessionId: string): void {
+async function markSessionIdle(sessionId: string): Promise<void> {
   if (sessions.get(sessionId)?.status !== 'active') return;
-  sessions.transition(sessionId, 'idle');
+  await sessions.transition(sessionId, 'idle');
   console.log(`[会话] id=${sessionId} status=idle`);
 }
 
 const onMessage: MessageReceiver = async (msg, bot) => {
   const resolved = resolveMentions(msg.text, msg.mentions);
   const hasThread = !!msg.threadId || !!msg.rootId;
-  const { session, isNew } = sessions.resolve(msg);
+  const { session, isNew } = await sessions.resolve(msg);
 
   console.log(
     `[收到] chat=${msg.chatId} threadId=${msg.threadId} rootId=${msg.rootId} sender=${msg.senderOpenId}`,
@@ -155,6 +160,10 @@ const onMessage: MessageReceiver = async (msg, bot) => {
 
   if (session.status === 'closed') {
     await bot.reply(msg.messageId, '这个话题的会话已经关闭，请新开一个话题继续。', hasThread);
+    return;
+  }
+  if (!isNew && session.status === 'creating') {
+    await bot.reply(msg.messageId, '当前会话正在准备，请稍后再追问。', hasThread);
     return;
   }
   if (session.status === 'active') {
@@ -216,9 +225,13 @@ const onMessage: MessageReceiver = async (msg, bot) => {
     .catch((error) => {
       console.error('[卡片] 演示失败:', (error as Error).message);
     })
-    .finally(() => {
+    .finally(async () => {
       if (activeRuns.get(session.id) === run) activeRuns.delete(session.id);
-      markSessionIdle(session.id);
+      try {
+        await markSessionIdle(session.id);
+      } catch (error) {
+        console.error('[会话] 保存空闲状态失败:', (error as Error).message);
+      }
     });
 };
 

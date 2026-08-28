@@ -53,6 +53,10 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     // `observedSessionId` 记住最近一次出现的会话标识。即使最终 result 没有携带它，Runner 仍能返回可
     // 持久化的 sessionId。
     let observedSessionId = sessionId;
+    // Codex 的答案和用量可能出现在两条不同事件里，因此 Runner 需要暂存它们。
+    let observedAnswer: string | undefined;
+    let observedStats: CliRunResult['stats'];
+
     let finalResult: CliRunResult | undefined;
     let resultError: Error | undefined;
     let stderr = '';
@@ -83,10 +87,13 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
           continue;
         }
         if (event.type === 'result') {
+          if (event.answer) observedAnswer = event.answer;
+          if (event.stats) observedStats = event.stats;
+          if (!observedAnswer) continue;
           finalResult = {
-            answer: event.answer,
+            answer: observedAnswer,
             sessionId: event.sessionId ?? observedSessionId,
-            ...(event.stats ? { stats: event.stats } : {}),
+            ...(observedStats ? { stats: observedStats } : {}),
           };
         }
       }

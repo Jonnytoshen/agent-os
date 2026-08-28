@@ -26,9 +26,31 @@ export interface AgentOSBotOptions {
   appId: string;
   appSecret: string;
   onMessage?: MessageReceiver;
+  onCardAction?: CardActionHandler;
 }
 
 export type MessageReceiver = (msg: IncomingMessage, bot: AgentOSBot) => Promise<void>;
+
+export type CardActionHandler = (action: CardAction) => Promise<CardActionResponse | undefined>;
+
+export interface CardAction {
+  operatorOpenId: string;
+  messageId: string;
+  value: Record<string, unknown>;
+}
+export interface CardActionResponse {
+  toast?: { type: 'success' | 'info' | 'warning' | 'error'; content: string };
+  card?: { type: 'raw'; data: CardJson };
+}
+
+export function parseCardAction(data: any): CardAction {
+  const value = data?.action?.value;
+  return {
+    operatorOpenId: data?.operator?.open_id ?? data?.operator_id?.open_id ?? '',
+    messageId: data?.context?.open_message_id ?? data?.open_message_id ?? '',
+    value: isRecord(value) ? value : {},
+  };
+}
 
 /**
  * 启动一个飞书自建应用 Bot。
@@ -42,7 +64,7 @@ export class AgentOSBot {
   readonly client: Lark.Client;
 
   constructor(options: AgentOSBotOptions) {
-    const { appId, appSecret, onMessage } = options;
+    const { appId, appSecret, onMessage, onCardAction } = options;
 
     // `Lark.Client` 管出。所有主动调 API 的动作——发消息、回消息、以后的传图片、改卡片都走它。
     // 它拿着 App ID 和 Secret 自己维护鉴权 token，不用操心过期刷新。
@@ -50,6 +72,10 @@ export class AgentOSBot {
 
     // `EventDispatcher` 管分发。长连接上下来的事件五花八门，dispatcher 按事件名路由到对应的处理函数。
     const dispatcher = new Lark.EventDispatcher({}).register({
+      'card.action.trigger': async (data: any) => {
+        if (!onCardAction) return undefined;
+        return onCardAction(parseCardAction(data));
+      },
       'im.message.receive_v1': async (data) => {
         const m = data.message;
         const msg: IncomingMessage = {
@@ -220,4 +246,8 @@ export function extractMessageText(messageType: string, content: string): string
       .trim();
   }
   return '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

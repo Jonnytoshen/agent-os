@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.3.0 (2026-08-31)
+
+### 🚀 Features
+
+* **cli:** add Codex as a selectable execution engine ([5470334](https://github.com/Jonnytoshen/agent-os/commit/54703349fcefad279de26c05f2a38c13f7329542))
+* **cli:** execute Claude Code tasks in reply flow ([1636da3](https://github.com/Jonnytoshen/agent-os/commit/1636da32c4fa015ff7b0b3dfe4dd3e78b4192fbe))
+* **cli:** resume Claude Code sessions across messages ([1af4b85](https://github.com/Jonnytoshen/agent-os/commit/1af4b85c136d720595538ab02227534c80ba0a3e))
+* **im:** stream live tool progress onto task cards ([be9e621](https://github.com/Jonnytoshen/agent-os/commit/be9e6216d57f260e5f9a13176ea4ad5f7a4adecc))
 ## 0.2.0 (2026-08-27)
 
 ### 🚀 Features

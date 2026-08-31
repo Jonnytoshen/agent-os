@@ -3,12 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 
 import type { CliId } from '../cli/types';
+import { resolveWorkspacePath } from './workspace';
 
 export interface BotConfig {
   id: string;
   appId: string;
   appSecret: string;
   defaultCliId: CliId;
+  workspaceDir: string;
   systemPrompt: string;
 }
 
@@ -21,6 +23,7 @@ const BotSchema = z.object({
   appIdEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   appSecretEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   defaultCli: z.enum(['claude', 'codex']),
+  workspace: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().optional().default(''),
   enabled: z.boolean().optional().default(true),
 });
@@ -29,7 +32,11 @@ const BotConfigFileSchema = z.object({
   bots: z.array(BotSchema).min(1),
 });
 
-export function parseBotConfigs(input: unknown, env: Environment): BotConfig[] {
+export function parseBotConfigs(
+  input: unknown,
+  env: Environment,
+  baseDirectory = process.cwd(),
+): BotConfig[] {
   const parsed = BotConfigFileSchema.parse(input);
   const ids = new Set<string>();
   for (const bot of parsed.bots) {
@@ -54,6 +61,10 @@ export function parseBotConfigs(input: unknown, env: Environment): BotConfig[] {
         appSecret,
         defaultCliId: bot.defaultCli,
         systemPrompt: bot.systemPrompt,
+        workspaceDir: resolveWorkspacePath(
+          bot.workspace ?? env.CLI_WORKDIR ?? env.CLAUDE_WORKDIR ?? '.',
+          baseDirectory,
+        ),
       };
     });
   if (configs.length === 0) throw new Error('至少需要启用一个 bot');
@@ -63,6 +74,7 @@ export function parseBotConfigs(input: unknown, env: Environment): BotConfig[] {
 export async function loadBotConfigs(
   filePath: string,
   env: Environment = process.env,
+  baseDirectory = process.cwd(),
 ): Promise<BotConfig[]> {
   let content: string;
   try {
@@ -77,7 +89,7 @@ export async function loadBotConfigs(
   }
 
   try {
-    return parseBotConfigs(JSON.parse(content), env);
+    return parseBotConfigs(JSON.parse(content), env, baseDirectory);
   } catch (error) {
     throw new Error(`bot 配置文件格式错误: ${(error as Error).message}`);
   }

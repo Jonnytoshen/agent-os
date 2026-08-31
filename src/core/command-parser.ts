@@ -1,18 +1,24 @@
 import { CliId } from '../cli/types';
 
-export type CommandName = 'close' | 'status' | 'help';
+export type SlashCommand = { name: 'close' | 'status' | 'help' } | { name: 'cd'; path?: string };
 
-export interface SlashCommand {
-  name: CommandName;
-}
-
-const COMMAND_RE = /^(?:@.+\s+)?\/(close|status|help)\s*$/;
-const CLI_REQUEST_RE = /^(?:@.+\s+)?\/(claude|codex)(?:\s+([\s\S]*))?$/;
+// 解析命令行输入，识别是否为支持的斜杠命令（Slash Command）。
+// 飞书集群人名称不能包含空格，因此命令前的 @mention 可以忽略。
+// 例如，以下输入将被识别为斜杠命令：
+// - "/close"
+// - "@bot /status"
+// - "/cd /path/to/directory"
+const COMMAND_RE = /(?:@\S+\s+)?\/(close|status|help)\s*$/;
+const CD_RE = /^(?:@\S+\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
+const CLI_REQUEST_RE = /^(?:@\S+\s+)?\/(claude|codex)(?:\s+([\s\S]*))?$/;
 
 export function parseCommand(text: string): SlashCommand | undefined {
-  const match = COMMAND_RE.exec(text.trim());
+  const value = text.trim();
+  const cdMatch = CD_RE.exec(value);
+  if (cdMatch) return { name: 'cd', path: cdMatch[1]?.trim() || undefined };
+  const match = COMMAND_RE.exec(value);
   if (!match) return undefined;
-  return { name: match[1] as CommandName };
+  return { name: match[1] as 'close' | 'status' | 'help' };
 }
 
 export interface CliRequest {
@@ -39,7 +45,6 @@ export interface CliRequest {
  * @see {@link CliId} 获取支持的 CLI ID 列表。
  */
 export function parseCliRequest(text: string): CliRequest | undefined {
-  console.log(text);
   const match = CLI_REQUEST_RE.exec(text.trim());
   if (!match) return undefined;
   return {

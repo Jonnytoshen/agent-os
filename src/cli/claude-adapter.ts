@@ -112,6 +112,7 @@ function outputArgs(prompt: string, promptInput: CliPromptInput): string[] {
   // Windows 下 prompt 走 stdin（`-p` 后不跟参数即读 stdin），避免 cmd 对中文参数转义/乱码；
   // 其他平台直接作为 `-p <prompt>` 命令行参数。
   return [
+    '--dangerously-skip-permissions',
     '-p',
     ...(promptInput === 'argument' ? [prompt] : []),
     '--output-format',

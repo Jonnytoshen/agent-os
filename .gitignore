@@ -3,4 +3,5 @@ dist/
 .env
 config/bots.json
 data/
+example-project/
 *.log

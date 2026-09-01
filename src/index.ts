@@ -3,7 +3,8 @@
  * 飞书消息驱动 Claude Code / Codex 完成任务。
  */
 import 'dotenv/config';
-import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { basename, join, resolve } from 'node:path';
 
 import { compactCliSession } from './cli/native-compact';
 import { listNativeCliSessions } from './cli/native-sessions';
@@ -11,6 +12,11 @@ import { getCliAdapter, listCliAdapters } from './cli/registry';
 import { runCli } from './cli/runner';
 import { CliAdapter } from './cli/types';
 import { BotConfig, buildBotPrompt, loadBotConfigs } from './core/bot-registry';
+import {
+  CollaborationInbox,
+  CollaborationMessage,
+  collaborationTurnKey,
+} from './core/collaboration';
 import { parseCliRequest, parseCommand } from './core/command-parser';
 import { type Session, SessionManager } from './core/session-manager';
 import { JsonSessionStore } from './core/session-store';
@@ -20,13 +26,14 @@ import { ensureWorkspaceDirectory, resolveWorkspacePath } from './core/workspace
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildCollaborationCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
   splitLongText,
   ThrottledCardUpdater,
 } from './im/card';
-import { AgentOSBot, CardActionHandler, type MessageReceiver } from './im/lark';
+import { AgentOSBot, BotIdentity, CardActionHandler, type MessageReceiver } from './im/lark';
 import { extractResourceKeys, resolveMentions } from './im/message-parser';
 
 const botConfigPath = resolve(process.env.BOTS_CONFIG ?? join('config', 'bots.json'));
@@ -40,6 +47,15 @@ const sessions = await SessionManager.open({
 });
 const activeRuns = new Map<string, ActiveRun>();
 const contextWindows = new Map<string, number>();
+
+interface BotRuntime {
+  config: BotConfig;
+  bot: AgentOSBot;
+  identity: BotIdentity;
+}
+const botRuntimes = new Map<string, BotRuntime>();
+const processedCollaborationTurns = new Set<string>();
+const collaborationInbox = new CollaborationInbox();
 
 console.log('Agent OS 启动，正在建立飞书长连接…');
 console.log(`[配置] 已注册 ${botConfigs.length} 个 bot，已恢复 ${sessions.size} 个会话`);
@@ -95,6 +111,83 @@ async function markSessionIdle(sessionId: string): Promise<void> {
   if (sessions.get(sessionId)?.status !== 'active') return;
   await sessions.transition(sessionId, 'idle');
   console.log(`[会话] id=${sessionId} status=idle`);
+}
+
+/**
+ * 发送协作消息。生成一段短任务编号并登记内部任务，再发送卡片和真实 @ 内容。任何一步失败都会执行撤销操作。
+ *
+ * @param options 协作消息选项，包括发送者配置、发送者 Bot 实例、回复的消息 ID、目标 Bot ID、任务 ID、工作目录和提示文本
+ */
+async function sendCollaborationMessage(options: {
+  senderConfig: BotConfig;
+  senderBot: AgentOSBot;
+  replyToMessageId: string;
+  targetBotId: string;
+  taskId: string;
+  workspaceDir: string;
+  prompt: string;
+}): Promise<void> {
+  const target = botRuntimes.get(options.targetBotId);
+  if (!target) throw new Error(`协作 bot 尚未就绪: ${options.targetBotId}`);
+  const collaboration: CollaborationMessage = {
+    dispatchId: randomUUID().replaceAll('-', '').slice(0, 12),
+    taskId: options.taskId,
+    fromBotId: options.senderConfig.id,
+    toBotId: options.targetBotId,
+    workspaceDir: options.workspaceDir,
+    prompt: options.prompt,
+  };
+  collaborationInbox.register(collaboration);
+  try {
+    const cardMessageId = await options.senderBot.replyCard(
+      options.replyToMessageId,
+      buildCollaborationCard({
+        senderName:
+          botRuntimes.get(options.senderConfig.id)?.identity.name ?? options.senderConfig.id,
+        targetName: target.identity.name,
+        workspaceName: basename(options.workspaceDir),
+        prompt: options.prompt,
+      }),
+      true,
+    );
+    if (!cardMessageId) throw new Error('飞书没有返回协作卡片 message_id');
+    const mentionMessageId = await options.senderBot.replyMention(
+      cardMessageId,
+      target.identity,
+      `新的代码审查任务（任务编号：${collaboration.dispatchId}），请查看上方卡片。`,
+      true,
+    );
+    if (!mentionMessageId) throw new Error('飞书没有返回协作通知 message_id');
+  } catch (error) {
+    // 撤销登记的协作消息，避免被目标 bot 消费
+    collaborationInbox.consume(collaboration.dispatchId, collaboration.toBotId);
+    throw error;
+  }
+  console.log(`[协作] task=${options.taskId} ${options.senderConfig.id} -> ${options.targetBotId}`);
+}
+
+/**
+ * 发送结果通知。
+ *
+ * @param options 结果通知选项，包括发送者 Bot 实例、回复的消息 ID、目标 Bot 身份、通知文本和是否在线程中回复
+ */
+async function sendResultNotification(options: {
+  bot: AgentOSBot;
+  replyToMessageId: string;
+  target: BotIdentity;
+  text: string;
+  replyInThread: boolean;
+}): Promise<void> {
+  try {
+    await options.bot.replyMention(
+      options.replyToMessageId,
+      options.target,
+      options.text,
+      options.replyInThread,
+    );
+  } catch (error) {
+    console.error('[通知] 结果通知发送失败:', (error as Error).message);
+  }
 }
 
 async function startConfiguredBot(config: BotConfig): Promise<void> {
@@ -162,6 +255,35 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
 
   const onMessage: MessageReceiver = async (msg, bot) => {
     const resolved = resolveMentions(msg.text, msg.mentions);
+    let senderRuntime: BotRuntime | undefined;
+    let collaboration: CollaborationMessage | undefined;
+    if (msg.senderType === 'app' || msg.senderType === 'bot') {
+      const currentRuntime = botRuntimes.get(config.id);
+      const mentionedCurrentBot = currentRuntime
+        ? msg.mentions.some((mention) => mention.openId === currentRuntime.identity.openId)
+        : false;
+      const dispatchId = msg.text.match(/任务编号：([a-f0-9]{12})/)?.[1];
+      const pending =
+        msg.messageType === 'post' && mentionedCurrentBot && dispatchId
+          ? collaborationInbox.consume(dispatchId, config.id)
+          : undefined;
+      if (!pending) {
+        console.log(`[协作] 忽略非目标 bot 消息 sender=${msg.senderOpenId} target=${config.id}`);
+        return;
+      }
+      senderRuntime = botRuntimes.get(pending.fromBotId);
+      if (!senderRuntime) {
+        console.log(`[协作] 找不到来源 bot: ${pending.fromBotId}`);
+        return;
+      }
+      const turnKey = collaborationTurnKey(pending);
+      if (processedCollaborationTurns.has(turnKey)) {
+        console.log(`[协作] 忽略重复消息 ${turnKey}`);
+        return;
+      }
+      processedCollaborationTurns.add(turnKey);
+      collaboration = pending;
+    }
     const hasThread = !!msg.threadId || !!msg.rootId;
     const command = parseCommand(resolved);
     const cliRequest = parseCliRequest(resolved);
@@ -179,7 +301,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       msg,
       cliRequest?.cliId ?? config.defaultCliId,
       config.id,
-      config.workspaceDir,
+      collaboration?.workspaceDir ?? config.workspaceDir,
     );
     let { session } = resolvedSession;
     const { isNew } = resolvedSession;
@@ -188,7 +310,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     }
     const cliAdapter = getCliAdapter(session.cliId);
     const isCompacting = command?.name === 'compact';
-    const taskText = cliRequest?.prompt ?? resolved;
+    const taskText = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
     const prompt = buildBotPrompt(config.systemPrompt, taskText);
     const taskCardTitle = isCompacting ? '整理上下文' : cliAdapter.displayName;
 
@@ -357,6 +479,11 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       return;
     }
 
+    if (collaboration && session.workspaceDir !== collaboration.workspaceDir) {
+      await ensureWorkspaceDirectory(collaboration.workspaceDir);
+      session = await sessions.setWorkspaceDir(session.id, collaboration.workspaceDir);
+    }
+
     await sessions.transition(session.id, 'active');
     const run = new AbortController();
     const activeRun: ActiveRun = {
@@ -498,7 +625,6 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
                 progress: snapshot,
                 answer: result.answer,
                 stats: result.stats,
-                recipientOpenId: msg.senderOpenId,
               }),
         );
         if (!isCompacting && answerNeedsContinuation(result.answer)) {
@@ -507,6 +633,49 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           }
         }
         console.log(`[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? '(无)'}`);
+
+        if (!collaboration) {
+          await sendResultNotification({
+            bot,
+            replyToMessageId: msg.messageId,
+            target: { openId: msg.senderOpenId, name: '' },
+            text: isCompacting
+              ? '上下文整理已完成，请查看上方结果。'
+              : '任务已完成，请查看上方结果。',
+            replyInThread: hasThread,
+          });
+        }
+        if (!isCompacting) {
+          try {
+            if (!collaboration && config.reviewBy) {
+              await sendCollaborationMessage({
+                senderConfig: config,
+                senderBot: bot,
+                replyToMessageId: msg.messageId,
+                targetBotId: config.reviewBy,
+                taskId: randomUUID(),
+                workspaceDir: session.workspaceDir,
+                prompt: [
+                  '请独立检查当前工作目录中刚完成的实现。',
+                  `原始任务：${taskText}`,
+                  '请直接读取代码和改动，指出明确问题；没有问题时说明检查通过。',
+                ].join('\n\n'),
+              });
+            } else if (collaboration && senderRuntime) {
+              await sendResultNotification({
+                bot,
+                replyToMessageId: msg.messageId,
+                target: senderRuntime.identity,
+                text: '代码审查已完成，请查看上方结果。',
+                replyInThread: hasThread,
+              });
+            }
+          } catch (error) {
+            const message = (error as Error).message;
+            console.error('[协作] 派发失败:', message);
+            await bot.reply(msg.messageId, `协作派发失败：${message}`, hasThread);
+          }
+        }
       })
       .catch(async (error) => {
         clearInterval(progressHeartbeat);
@@ -557,8 +726,18 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       });
   };
 
-  new AgentOSBot({ appId: config.appId, appSecret: config.appSecret, onCardAction, onMessage });
-  console.log(`[Bot ${config.id.toUpperCase()}] 已连接`);
+  const startedBot = new AgentOSBot({
+    appId: config.appId,
+    appSecret: config.appSecret,
+    onCardAction,
+    onMessage,
+  });
+  const identity = await startedBot.getIdentity();
+  const runtime = { config, bot: startedBot, identity };
+  botRuntimes.set(config.id, runtime);
+  console.log(
+    `[Bot ${config.id.toUpperCase()}] 已连接 name=${identity.name} open_id=${identity.openId}`,
+  );
 }
 
 await Promise.all(botConfigs.map(startConfiguredBot));

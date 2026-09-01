@@ -17,6 +17,7 @@ export interface IncomingMessage {
   text: string; // text 消息的正文（其他类型为空串）
   rootId: string;
   threadId: string;
+  senderType: string;
   senderOpenId: string;
   mentions: Mention[];
   rawContent: string;
@@ -27,6 +28,11 @@ export interface AgentOSBotOptions {
   appSecret: string;
   onMessage?: MessageReceiver;
   onCardAction?: CardActionHandler;
+}
+
+export interface BotIdentity {
+  openId: string;
+  name: string;
 }
 
 export type MessageReceiver = (msg: IncomingMessage, bot: AgentOSBot) => Promise<void>;
@@ -53,12 +59,58 @@ export function parseCardAction(data: any): CardAction {
 }
 
 /**
+ * 构建飞书消息内容，@ 指定的 Bot 并附带文本。
+ * 飞书 post 消息的 content 是带语言节点的二维数组。直接把普通文本塞进去的话，接口会报错。
+ *
+ * @param target 要 @ 的 Bot 身份信息
+ * @param text 要发送的文本内容
+ * @returns 飞书消息内容对象
+ */
+export function buildMentionPostContent(
+  target: BotIdentity,
+  text: string,
+): Record<string, unknown> {
+  return {
+    zh_cn: {
+      title: '',
+      content: [
+        [
+          {
+            tag: 'at',
+            user_id: target.openId,
+            ...(target.name ? { user_name: target.name } : {}),
+          },
+          { tag: 'text', text: ` ${text}` },
+        ],
+      ],
+    },
+  };
+}
+
+/**
+ * 获取飞书自建应用 Bot 的身份信息。
+ *
+ * @param client 飞书客户端实例
+ * @returns Bot 的身份信息，包括 openId 和名称
+ */
+async function fetchBotIdentity(client: Lark.Client): Promise<BotIdentity> {
+  const response = await client.request({
+    url: '/open-apis/bot/v3/info',
+    method: 'GET',
+  });
+  const bot = (response as { bot?: { open_id?: string; app_name?: string } }).bot;
+  if (!bot?.open_id) throw new Error('飞书没有返回 bot open_id');
+  return { openId: bot.open_id, name: bot.app_name?.trim() || 'Bot' };
+}
+
+/**
  * 启动一个飞书自建应用 Bot。
  *
  * @param options 配置项
  * @param options.appId 飞书自建应用的 App ID
  * @param options.appSecret 飞书自建应用的 App Secret
  * @param options.onMessage 可选的消息接收器，收到消息时会被调用
+ * @param options.onCardAction 可选的卡片动作处理器，收到卡片动作时会被调用
  */
 export class AgentOSBot {
   readonly client: Lark.Client;
@@ -86,6 +138,7 @@ export class AgentOSBot {
           text: extractMessageText(m.message_type, m.content),
           rootId: m.root_id ?? '',
           threadId: m.thread_id ?? '',
+          senderType: data.sender.sender_type ?? '',
           senderOpenId: data.sender.sender_id?.open_id ?? '',
           mentions: parseMentions(m.mentions),
           rawContent: m.content,
@@ -102,6 +155,15 @@ export class AgentOSBot {
   }
 
   /**
+   * 获取 Bot 的身份信息，包括 openId 和名称。
+   *
+   * @returns Bot 的身份信息
+   */
+  async getIdentity(): Promise<BotIdentity> {
+    return await fetchBotIdentity(this.client);
+  }
+
+  /**
    * 回复消息（文本）。
    *
    * @param messageId 要回复的消息 ID
@@ -115,6 +177,23 @@ export class AgentOSBot {
       data: {
         msg_type: 'text',
         content: JSON.stringify({ text }),
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    return res.data?.message_id;
+  }
+
+  async replyMention(
+    messageId: string,
+    target: BotIdentity,
+    text: string,
+    replyInThread = false,
+  ): Promise<string | undefined> {
+    const res = await this.client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: {
+        msg_type: 'post',
+        content: JSON.stringify(buildMentionPostContent(target, text)),
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });

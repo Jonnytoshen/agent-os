@@ -7,6 +7,20 @@ export function promptInputForPlatform(platform: NodeJS.Platform): CliPromptInpu
   return platform === 'win32' ? 'stdin' : 'argument';
 }
 
+export type CliCompactPlan =
+  | {
+      protocol: 'claude-stream-json';
+      command: string;
+      args: string[];
+      prompt: string;
+    }
+  | {
+      protocol: 'codex-app-server';
+      command: string;
+      args: string[];
+      sessionId: string;
+    };
+
 export interface CliRunStats {
   durationMs?: number;
   turns?: number;
@@ -17,6 +31,12 @@ export interface CliRunStats {
   cacheCreationTokens?: number;
   contextUsedTokens?: number;
   contextWindowTokens?: number;
+}
+
+export interface CliSessionSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
 }
 
 export type CliEvent =
@@ -39,6 +59,7 @@ export interface CliAdapter {
   readonly displayName: string;
   buildArgs(prompt: string, promptInput: CliPromptInput): string[];
   buildResumeArgs(prompt: string, sessionId: string, promptInput: CliPromptInput): string[];
+  buildCompactPlan(sessionId: string, instructions?: string): CliCompactPlan;
   parseEvents(line: string): CliEvent[];
 }
 

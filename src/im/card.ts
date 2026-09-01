@@ -1,7 +1,7 @@
 /**
  * 飞书任务卡片：把 CLI 事件整理成稳定、低噪音的任务进度。
  */
-import type { CliRunStats } from '../cli/types';
+import type { CliRunStats, CliSessionSummary } from '../cli/types';
 import type { TaskActivity, TaskProgressSnapshot } from '../core/task-progress';
 
 export type CardJson = Record<string, unknown>;
@@ -17,6 +17,19 @@ export interface TaskCardOptions {
   technicalDetail?: string;
   recipientOpenId?: string;
   abortSessionId?: string;
+}
+
+export interface ResumeCardOptions {
+  agentSessionId: string;
+  cliName: string;
+  currentCliSessionId?: string;
+  sessions: CliSessionSummary[];
+}
+
+export interface SessionNoticeCardOptions {
+  title: string;
+  detail: string;
+  template?: 'blue' | 'green' | 'grey';
 }
 
 const STATUS_STYLE = {
@@ -339,6 +352,128 @@ export function buildTaskCard(options: TaskCardOptions): CardJson {
         options.status === 'running'
           ? buildRunningElements(options)
           : buildFinishedElements(options),
+    },
+  };
+}
+
+/**
+ * 格式化会话时间为本地化的日期和时间字符串。
+ * @param value ISO 8601 格式的日期时间字符串
+ * @returns 格式化后的日期时间字符串，如果输入无效则返回原始值
+ */
+function formatSessionTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+/**
+ * 构建恢复历史会话的卡片。
+ * @param options 恢复历史会话的选项。
+ * @returns 飞书卡片 JSON 对象。
+ */
+export function buildResumeCard(options: ResumeCardOptions): CardJson {
+  const elements: Record<string, unknown>[] = options.sessions.length
+    ? options.sessions.flatMap((session, index) => {
+        const current = session.id === options.currentCliSessionId;
+        const row: Record<string, unknown> = {
+          tag: 'column_set',
+          flex_mode: 'none',
+          horizontal_spacing: '12px',
+          columns: [
+            {
+              tag: 'column',
+              width: 'weighted',
+              weight: 4,
+              elements: [
+                {
+                  tag: 'markdown',
+                  content: `**${escapeFeishuMarkdown(session.title)}**\n_${formatSessionTime(session.updatedAt)} · ${session.id.slice(0, 8)}_`,
+                },
+              ],
+            },
+            {
+              tag: 'column',
+              width: 'auto',
+              vertical_align: 'center',
+              elements: current
+                ? [{ tag: 'markdown', content: '**当前会话**' }]
+                : [
+                    {
+                      tag: 'button',
+                      text: { tag: 'plain_text', content: '恢复' },
+                      type: 'primary_filled',
+                      size: 'medium',
+                      behaviors: [
+                        {
+                          type: 'callback',
+                          value: {
+                            action: 'resume_cli_session',
+                            agentSessionId: options.agentSessionId,
+                            cliSessionId: session.id,
+                          },
+                        },
+                      ],
+                    },
+                  ],
+            },
+          ],
+        };
+        return index === options.sessions.length - 1 ? [row] : [row, { tag: 'hr' }];
+      })
+    : [
+        {
+          tag: 'markdown',
+          content:
+            '当前工作目录里还没有可以恢复的 CLI 会话。先完成一次任务，再用 `/new` 开启新会话。',
+        },
+      ];
+
+  return {
+    schema: '2.0',
+    config: {
+      update_multi: true,
+      summary: { content: `${options.cliName}：选择历史会话` },
+    },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: '恢复历史会话' },
+      subtitle: { tag: 'plain_text', content: options.cliName },
+    },
+    body: {
+      direction: 'vertical',
+      vertical_spacing: '12px',
+      elements: [
+        { tag: 'markdown', content: '选择后，当前话题会继续使用对应的 CLI 上下文。' },
+        ...elements,
+      ],
+    },
+  };
+}
+
+/**
+ * 构建会话通知卡片。
+ * @param options 会话通知卡片的选项。
+ * @returns 飞书卡片 JSON 对象。
+ */
+export function buildSessionNoticeCard(options: SessionNoticeCardOptions): CardJson {
+  return {
+    schema: '2.0',
+    config: { summary: { content: options.title } },
+    header: {
+      template: options.template ?? 'blue',
+      title: { tag: 'plain_text', content: options.title },
+    },
+    body: {
+      direction: 'vertical',
+      vertical_spacing: '12px',
+      elements: [{ tag: 'markdown', content: options.detail }],
     },
   };
 }

@@ -1,4 +1,7 @@
-import type { CliAdapter, CliPromptInput, CliEvent, CliRunStats } from './types';
+import { isRecord } from '../utils/check';
+import { asNumber } from '../utils/number';
+import { shortText } from '../utils/text';
+import type { CliAdapter, CliPromptInput, CliEvent, CliRunStats, CliCompactPlan } from './types';
 
 interface CodexEvent {
   type?: unknown;
@@ -9,26 +12,11 @@ interface CodexEvent {
   message?: unknown;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function shortText(value: unknown, maxLength = 72): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const text = value.replace(/\s+/g, ' ').trim();
-  if (!text) return undefined;
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
-}
-
 function firstChangedPath(item: Record<string, unknown>): string | undefined {
-  if (typeof item.path === 'string') return shortText(item.path);
+  if (typeof item.path === 'string') return shortText(item.path, 72);
   if (!Array.isArray(item.changes)) return undefined;
   const change = item.changes.find(isRecord);
-  return change ? shortText(change.path) : undefined;
+  return change ? shortText(change.path, 72) : undefined;
 }
 
 function toolInfo(item: Record<string, unknown>):
@@ -39,7 +27,7 @@ function toolInfo(item: Record<string, unknown>):
     }
   | undefined {
   if (item.type === 'command_execution') {
-    const detail = shortText(item.command);
+    const detail = shortText(item.command, 72);
     return { toolName: 'Bash', label: '运行命令', ...(detail ? { detail } : {}) };
   }
   if (item.type === 'file_change') {
@@ -47,13 +35,13 @@ function toolInfo(item: Record<string, unknown>):
     return { toolName: 'Edit', label: '修改文件', ...(detail ? { detail } : {}) };
   }
   if (item.type === 'web_search') {
-    const detail = shortText(item.query);
+    const detail = shortText(item.query, 72);
     return { toolName: 'WebSearch', label: '搜索资料', ...(detail ? { detail } : {}) };
   }
   if (item.type === 'mcp_tool_call') {
     const server = typeof item.server === 'string' ? item.server : '';
     const tool = typeof item.tool === 'string' ? item.tool : '';
-    const detail = shortText([server, tool].filter(Boolean).join('.'));
+    const detail = shortText([server, tool].filter(Boolean).join('.'), 72);
     return { toolName: 'MCP', label: '调用外部工具', ...(detail ? { detail } : {}) };
   }
   return undefined;
@@ -114,6 +102,20 @@ export class CodexAdapter implements CliAdapter {
     // 从 stdin 读取 prompt，规避 Windows 下 shell 参数转义问题。
     args.push(promptInput === 'stdin' ? '-' : prompt);
     return args;
+  }
+
+  /**
+   * 构建 Codex 的压缩计划（Compact Plan），生成压缩计划的命令行参数。
+   * @param sessionId 会话标识
+   * @returns 压缩计划对象
+   */
+  buildCompactPlan(sessionId: string): CliCompactPlan {
+    return {
+      protocol: 'codex-app-server' as const,
+      command: this.command,
+      args: ['app-server', '--stdio'],
+      sessionId,
+    };
   }
 
   parseEvents(line: string): CliEvent[] {

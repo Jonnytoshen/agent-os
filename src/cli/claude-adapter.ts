@@ -1,4 +1,14 @@
-import type { CliAdapter, CliPromptInput, CliEvent, CliRunStats } from './types';
+import { isRecord } from '../utils/check';
+import { asNumber } from '../utils/number';
+import { shortText } from '../utils/text';
+import {
+  type CliAdapter,
+  type CliPromptInput,
+  type CliEvent,
+  type CliRunStats,
+  promptInputForPlatform,
+  CliCompactPlan,
+} from './types';
 
 interface ClaudeEvent {
   type?: unknown;
@@ -36,14 +46,6 @@ const TOOL_LABELS: Record<string, string> = {
   Write: '写入文件',
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
 function shortPath(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value) return undefined;
   const normalized = value.replaceAll('\\', '/');
@@ -51,23 +53,16 @@ function shortPath(value: unknown): string | undefined {
   return parts.slice(normalized.startsWith('/') ? -2 : -3).join('/');
 }
 
-function shortText(value: unknown, maxLength = 72): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const text = value.replace(/\s+/g, ' ').trim();
-  if (!text) return undefined;
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
-}
-
 function toolDetail(name: string, input: unknown): string | undefined {
   if (!isRecord(input)) return undefined;
   if (['Read', 'Edit', 'Write'].includes(name)) {
     return shortPath(input.file_path);
   }
-  if (name === 'Glob') return shortText(input.pattern);
-  if (name === 'Grep') return shortText(input.pattern);
-  if (name === 'Bash') return shortText(input.description);
-  if (name === 'Agent' || name === 'Task') return shortText(input.description);
-  if (name === 'WebSearch') return shortText(input.query);
+  if (name === 'Glob') return shortText(input.pattern, 72);
+  if (name === 'Grep') return shortText(input.pattern, 72);
+  if (name === 'Bash') return shortText(input.description, 72);
+  if (name === 'Agent' || name === 'Task') return shortText(input.description, 72);
+  if (name === 'WebSearch') return shortText(input.query, 72);
   return undefined;
 }
 
@@ -136,6 +131,23 @@ export class ClaudeAdapter implements CliAdapter {
 
   buildResumeArgs(prompt: string, sessionId: string, promptInput: CliPromptInput): string[] {
     return ['--resume', sessionId, ...outputArgs(prompt, promptInput)];
+  }
+
+  /**
+   * 构建 Claude Code 的压缩计划（Compact Plan），生成压缩计划的命令行参数。
+   * @param sessionId 会话标识
+   * @param instructions 压缩指令，可选
+   * @returns 压缩计划对象
+   */
+  buildCompactPlan(sessionId: string, instructions?: string): CliCompactPlan {
+    const command = instructions?.trim() ? `/compact ${instructions.trim()}` : '/compact';
+    return {
+      protocol: 'claude-stream-json' as const,
+      command: this.command,
+      // 现在 prompt 走 stdin（`-p -`），runClaudeCompact 需要这份文本写入子进程。
+      prompt: command,
+      args: this.buildResumeArgs(command, sessionId, promptInputForPlatform(process.platform)),
+    };
   }
 
   parseEvents(line: string): CliEvent[] {

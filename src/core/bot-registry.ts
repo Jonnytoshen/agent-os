@@ -13,6 +13,7 @@ export interface BotConfig {
   workspaceDir: string;
   systemPrompt: string;
   reviewBy?: string;
+  collaborationMaxRounds: number;
 }
 
 type Environment = Record<string, string | undefined>;
@@ -30,6 +31,8 @@ const BotSchema = z.object({
     .string()
     .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/)
     .optional(),
+  // 默认值是 2，同时限制在 1～4 之间。配置写错时，程序会在启动阶段直接报错。
+  collaborationMaxRounds: z.number().int().min(1).max(4).optional().default(2),
   enabled: z.boolean().optional().default(true),
 });
 
@@ -67,6 +70,7 @@ export function parseBotConfigs(
         defaultCliId: bot.defaultCli,
         systemPrompt: bot.systemPrompt,
         reviewBy: bot.reviewBy,
+        collaborationMaxRounds: bot.collaborationMaxRounds,
         workspaceDir: resolveWorkspacePath(
           bot.workspace ?? env.CLI_WORKDIR ?? env.CLAUDE_WORKDIR ?? '.',
           baseDirectory,

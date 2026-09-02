@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.4.0 (2026-09-02)
+
+### 🚀 Features
+
+* **cli:** manage native CLI sessions from Feishu ([48a0931](https://github.com/Jonnytoshen/agent-os/commit/48a09317c1d4793c486097e42fc2b3d47d95dce2))
+* **core:** add bot-to-bot collaboration with review handoff ([64211d0](https://github.com/Jonnytoshen/agent-os/commit/64211d0ccd45a3638f6b16562111469520f460e7))
+* **core:** add per-bot workspaces with /cd switching ([78d3212](https://github.com/Jonnytoshen/agent-os/commit/78d3212b1673e2a1044992846cef726e18f7b5fc))
+* **core:** run multiple Feishu bots from a config file ([83d160b](https://github.com/Jonnytoshen/agent-os/commit/83d160bb06d768eb8dda8bad5c349a0aa828500d))
+* **core:** support multi-round review collaboration ([af4a4eb](https://github.com/Jonnytoshen/agent-os/commit/af4a4eb85c666b3a12402e5c7ab0a8496d76d598))
 ## 0.3.0 (2026-08-31)
 
 ### 🚀 Features

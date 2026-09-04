@@ -1,20 +1,16 @@
 import { CliId } from '../cli/types';
 
 export type SlashCommand =
-  | { name: 'close' | 'status' | 'help' | 'new' | 'resume' }
+  | { name: 'close' | 'status' | 'help' | 'new' | 'resume' | 'team' }
   | { name: 'compact'; instructions?: string }
   | { name: 'cd'; path?: string };
 
-// 解析命令行输入，识别是否为支持的斜杠命令（Slash Command）。
-// 飞书集群人名称不能包含空格，因此命令前的 @mention 可以忽略。
-// 例如，以下输入将被识别为斜杠命令：
-// - "/close"
-// - "@bot /status"
-// - "/cd /path/to/directory"
-const COMMAND_RE = /(?:@\S+\s+)?\/(close|status|help|new|resume)\s*$/;
-const CD_RE = /^(?:@\S+\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
-const COMPACT_RE = /^(?:@\S+\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
-const CLI_REQUEST_RE = /^(?:@\S+\s+)?\/(claude|codex)(?:\s+([\s\S]*))?$/;
+// 正则表达式用于匹配不同的斜杠命令。
+// 把可选的 bot 名称匹配改成非贪婪形式，让 `@CEO 助理 /team` 这类带空格的显示名可以正常解析。
+const COMMAND_RE = /^(?:@.+?\s+)?\/(close|status|help|new|resume|team)\s*$/;
+const CD_RE = /^(?:@.+?\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
+const COMPACT_RE = /^(?:@.+?\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
+const CLI_REQUEST_RE = /^(?:@.+?\s+)?\/(claude|codex)(?:\s+([\s\S]*))?$/;
 
 export function parseCommand(text: string): SlashCommand | undefined {
   const value = text.trim();
@@ -37,7 +33,7 @@ export function parseCommand(text: string): SlashCommand | undefined {
   // 解析其他斜杠命令
   const match = COMMAND_RE.exec(value);
   if (!match) return undefined;
-  return { name: match[1] as 'close' | 'status' | 'help' | 'new' | 'resume' };
+  return { name: match[1] as 'close' | 'status' | 'help' | 'new' | 'resume' | 'team' };
 }
 
 export interface CliRequest {

@@ -11,7 +11,7 @@ import { listNativeCliSessions } from './cli/native-sessions';
 import { getCliAdapter, listCliAdapters } from './cli/registry';
 import { runCli } from './cli/runner';
 import { CliAdapter } from './cli/types';
-import { BotConfig, buildBotPrompt, loadBotConfigs } from './core/bot-registry';
+import { BotConfig, buildBotPrompt, loadAgentOsConfig } from './core/bot-registry';
 import {
   CollaborationInbox,
   CollaborationMessage,
@@ -22,6 +22,7 @@ import { type Session, SessionManager } from './core/session-manager';
 import { JsonSessionStore } from './core/session-store';
 import { ActiveRun, requestTaskAbort } from './core/task-abort';
 import { TaskProgressTracker } from './core/task-progress';
+import { TeamRegistry } from './core/team-registry';
 import { ensureWorkspaceDirectory, resolveWorkspacePath } from './core/workspace';
 import {
   answerContinuation,
@@ -30,6 +31,7 @@ import {
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
+  buildTeamCard,
   splitLongText,
   ThrottledCardUpdater,
 } from './im/card';
@@ -37,8 +39,17 @@ import { AgentOSBot, BotIdentity, CardActionHandler, type MessageReceiver } from
 import { extractResourceKeys, resolveMentions } from './im/message-parser';
 
 const botConfigPath = resolve(process.env.BOTS_CONFIG ?? join('config', 'bots.json'));
-const botConfigs = await loadBotConfigs(botConfigPath);
+const agentOsConfig = await loadAgentOsConfig(botConfigPath);
+const botConfigs = agentOsConfig.bots;
+const teamRegistry = new TeamRegistry(agentOsConfig.teamLeaderId, botConfigs);
+// 确保各 bot 的工作目录存在。
 await Promise.all(botConfigs.map((config) => ensureWorkspaceDirectory(config.workspaceDir)));
+// 检查团队中缺失的技能，并发出警告。
+for (const missing of await teamRegistry.findMissingSkills()) {
+  console.warn(
+    `[Skill] bot=${missing.botId} 找不到 $${missing.skill}，请安装到当前工作目录的 .agents/skills 或 .claude/skills`,
+  );
+}
 const defaultWorkspaces = Object.fromEntries(
   botConfigs.map((config) => [config.id, config.workspaceDir]),
 );
@@ -58,7 +69,10 @@ const processedCollaborationTurns = new Set<string>();
 const collaborationInbox = new CollaborationInbox();
 
 console.log('Agent OS 启动，正在建立飞书长连接…');
-console.log(`[配置] 已注册 ${botConfigs.length} 个 bot，已恢复 ${sessions.size} 个会话`);
+console.log(
+  `[配置] 已注册 ${botConfigs.length} 个 bot，Team Leader=${teamRegistry.leaderBotId}，已恢复 ${sessions.size} 个会话`,
+);
+
 for (const adapter of listCliAdapters()) {
   console.log(`[CLI] id=${adapter.id} command=${adapter.command}`);
 }
@@ -212,10 +226,14 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         return { toast: { type: 'error', content: '这条会话记录已经失效。' } };
       }
       if (session.status === 'active') {
-        return { toast: { type: 'warning', content: '当前任务结束后才能切换会话。' } };
+        return {
+          toast: { type: 'warning', content: '当前任务结束后才能切换会话。' },
+        };
       }
       if (session.status === 'closed') {
-        return { toast: { type: 'warning', content: '当前话题的会话已经关闭。' } };
+        return {
+          toast: { type: 'warning', content: '当前话题的会话已经关闭。' },
+        };
       }
       try {
         const cliAdapter = getCliAdapter(session.cliId);
@@ -225,7 +243,10 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         });
         if (!nativeSessions.some((item) => item.id === cliSessionId)) {
           return {
-            toast: { type: 'error', content: '这个 CLI 会话已经不在当前工作目录中。' },
+            toast: {
+              type: 'error',
+              content: '这个 CLI 会话已经不在当前工作目录中。',
+            },
           };
         }
         const updated = await sessions.setCliSessionId(session.id, cliSessionId);
@@ -251,10 +272,14 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       const sessionId = typeof action.value.sessionId === 'string' ? action.value.sessionId : '';
       const outcome = requestTaskAbort(activeRuns, sessionId, action.operatorOpenId);
       if (outcome === 'not_found') {
-        return { toast: { type: 'info', content: '任务已经结束，无需再次停止。' } };
+        return {
+          toast: { type: 'info', content: '任务已经结束，无需再次停止。' },
+        };
       }
       if (outcome === 'forbidden') {
-        return { toast: { type: 'warning', content: '只有任务发起人可以停止它。' } };
+        return {
+          toast: { type: 'warning', content: '只有任务发起人可以停止它。' },
+        };
       }
       if (outcome === 'already_stopping') {
         return { toast: { type: 'info', content: '正在停止任务，请稍候。' } };
@@ -321,7 +346,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     const cliAdapter = getCliAdapter(session.cliId);
     const isCompacting = command?.name === 'compact';
     const taskText = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
-    const prompt = buildBotPrompt(config.systemPrompt, taskText);
+    const prompt = buildBotPrompt(config, taskText, teamRegistry.contextFor(config.id));
     const taskCardTitle = isCompacting ? '整理上下文' : cliAdapter.displayName;
 
     console.log(
@@ -349,6 +374,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         msg.messageId,
         [
           '/status 查看当前会话',
+          '/team 查看当前 Agent 团队',
           '/new 开启一个全新的 CLI 会话',
           '/resume 选择当前工作目录中的 CLI 会话',
           '/compact [要求] 使用当前引擎原生整理上下文',
@@ -359,6 +385,27 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           '/claude <任务> 新话题使用 Claude Code',
           '/codex <任务> 新话题使用 Codex',
         ].join('\n'),
+        hasThread,
+      );
+      return;
+    }
+    if (command?.name === 'team') {
+      await bot.replyCard(
+        msg.messageId,
+        buildTeamCard({
+          members: teamRegistry.members.map((member) => {
+            const runtime = botRuntimes.get(member.id);
+            return {
+              id: member.id,
+              displayName: runtime?.identity.name ?? member.id,
+              role: member.role,
+              cliName: getCliAdapter(member.defaultCliId).displayName,
+              skills: member.skills,
+              isLeader: member.id === teamRegistry.leaderBotId,
+              ready: !!runtime,
+            };
+          }),
+        }),
         hasThread,
       );
       return;

@@ -10,10 +10,17 @@ export interface BotConfig {
   appId: string;
   appSecret: string;
   defaultCliId: CliId;
+  role: string;
+  skills: string[];
   workspaceDir: string;
   systemPrompt: string;
   reviewBy?: string;
   collaborationMaxRounds: number;
+}
+
+export interface AgentOSConfig {
+  teamLeaderId: string;
+  bots: BotConfig[];
 }
 
 type Environment = Record<string, string | undefined>;
@@ -25,26 +32,33 @@ const BotSchema = z.object({
   appIdEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   appSecretEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   defaultCli: z.enum(['claude', 'codex']),
+  role: z.string().trim().min(1),
+  skills: z
+    .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/))
+    .optional()
+    .default([]),
   workspace: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().optional().default(''),
   reviewBy: z
     .string()
     .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/)
     .optional(),
-  // 默认值是 2，同时限制在 1～4 之间。配置写错时，程序会在启动阶段直接报错。
-  collaborationMaxRounds: z.number().int().min(1).max(4).optional().default(2),
+  // 把默认上限提高到 16，同时把可配置范围放宽到 1～32。16 是防止失控循环的安全上限，任务已经完成时
+  // 仍会立即结束，不会为了凑满次数继续派发。
+  collaborationMaxRounds: z.number().int().min(1).max(32).optional().default(16),
   enabled: z.boolean().optional().default(true),
 });
 
 const BotConfigFileSchema = z.object({
+  teamLeader: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
   bots: z.array(BotSchema).min(1),
 });
 
-export function parseBotConfigs(
+export function parseAgentOSConfig(
   input: unknown,
   env: Environment,
   baseDirectory = process.cwd(),
-): BotConfig[] {
+): AgentOSConfig {
   const parsed = BotConfigFileSchema.parse(input);
   const ids = new Set<string>();
   for (const bot of parsed.bots) {
@@ -68,6 +82,8 @@ export function parseBotConfigs(
         appId,
         appSecret,
         defaultCliId: bot.defaultCli,
+        role: bot.role,
+        skills: [...new Set(bot.skills)],
         systemPrompt: bot.systemPrompt,
         reviewBy: bot.reviewBy,
         collaborationMaxRounds: bot.collaborationMaxRounds,
@@ -78,9 +94,10 @@ export function parseBotConfigs(
       };
     });
   if (configs.length === 0) throw new Error('至少需要启用一个 bot');
-
-  // 配置解析完成后，再检查目标是否真的存在。指向一台未启用的 bot，或者把任务交给自己，在启动时直接报错。
   const enabledIds = new Set(configs.map((config) => config.id));
+  if (!enabledIds.has(parsed.teamLeader)) {
+    throw new Error(`teamLeader 指向未启用的 bot: ${parsed.teamLeader}`);
+  }
   for (const config of configs) {
     if (config.reviewBy && !enabledIds.has(config.reviewBy)) {
       throw new Error(`bot ${config.id} 的 reviewBy 指向未启用的 bot: ${config.reviewBy}`);
@@ -89,14 +106,14 @@ export function parseBotConfigs(
       throw new Error(`bot ${config.id} 不能把自己配置为 reviewBy`);
     }
   }
-  return configs;
+  return { teamLeaderId: parsed.teamLeader, bots: configs };
 }
 
-export async function loadBotConfigs(
+export async function loadAgentOsConfig(
   filePath: string,
   env: Environment = process.env,
   baseDirectory = process.cwd(),
-): Promise<BotConfig[]> {
+): Promise<AgentOSConfig> {
   let content: string;
   try {
     content = await readFile(filePath, 'utf8');
@@ -110,14 +127,33 @@ export async function loadBotConfigs(
   }
 
   try {
-    return parseBotConfigs(JSON.parse(content), env, baseDirectory);
+    return parseAgentOSConfig(JSON.parse(content), env, baseDirectory);
   } catch (error) {
     throw new Error(`bot 配置文件格式错误: ${(error as Error).message}`);
   }
 }
 
-export function buildBotPrompt(systemPrompt: string, prompt: string): string {
-  const role = systemPrompt.trim();
-  if (!role) return prompt;
-  return `角色：${role}\n\n任务：${prompt}`;
+/**
+ * 构建 bot 的完整提示信息，包括角色、系统提示、团队上下文、技能要求和当前任务。
+ * @param config 包含角色、技能和系统提示的 bot 配置
+ * @param prompt 当前任务的描述
+ * @param teamContext 团队上下文信息
+ * @returns 构建好的完整提示信息
+ */
+export function buildBotPrompt(
+  config: Pick<BotConfig, 'role' | 'skills' | 'systemPrompt'>,
+  prompt: string,
+  teamContext = '',
+): string {
+  return [
+    `你的角色：${config.role}`,
+    config.systemPrompt.trim(),
+    teamContext.trim(),
+    config.skills.length > 0
+      ? `本次任务必须按项目 Skill 执行：${config.skills.map((skill) => `$${skill}`).join('、')}`
+      : '',
+    `当前任务：${prompt}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }

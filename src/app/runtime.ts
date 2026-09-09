@@ -1,6 +1,7 @@
 import { BotConfig } from '../core/bot-registry';
 import { ClarificationFlowStore } from '../core/clarification';
 import { CollaborationInbox } from '../core/collaboration';
+import { ProductSpecFlowStore } from '../core/product-spec';
 import { SessionManager } from '../core/session-manager';
 import { ActiveRun } from '../core/task-abort';
 import { TeamRegistry } from '../core/team-registry';
@@ -27,4 +28,5 @@ export interface AgentOSRuntime {
   processedCollaborationTurns: Set<string>;
   collaborationInbox: CollaborationInbox;
   clarificationFlows: ClarificationFlowStore;
+  productSpecFlows: ProductSpecFlowStore;
 }

@@ -27,7 +27,7 @@ import {
   collaborationTurnKey,
 } from './core/collaboration';
 import { parseCliRequest, parseCommand } from './core/command-parser';
-import { findProductSpecRequest } from './core/product-spec';
+import { findProductSpecRequest, ProductSpecFlowStore } from './core/product-spec';
 import { SessionManager } from './core/session-manager';
 import { JsonSessionStore } from './core/session-store';
 import type { ActiveRun } from './core/task-abort';
@@ -40,7 +40,7 @@ import {
   answerNeedsContinuation,
   buildClarificationCard,
   buildCollaborationCard,
-  buildProductSpecReadyCard,
+  buildProductSpecApprovalCard,
   buildSessionNoticeCard,
   buildTaskCard,
   splitLongText,
@@ -73,6 +73,7 @@ const botRuntimes = new Map<string, AgentOSBotRuntime>();
 const processedCollaborationTurns = new Set<string>();
 const collaborationInbox = new CollaborationInbox();
 const clarificationFlows = new ClarificationFlowStore();
+const productSpecFlows = new ProductSpecFlowStore();
 const runtime: AgentOSRuntime = {
   sessions,
   teamRegistry,
@@ -82,6 +83,7 @@ const runtime: AgentOSRuntime = {
   processedCollaborationTurns,
   collaborationInbox,
   clarificationFlows,
+  productSpecFlows,
 };
 
 console.log('Agent OS 启动，正在建立飞书长连接…');
@@ -437,7 +439,14 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
             activeRuns.delete(session.id);
           }
           await markSessionIdle(sessions, session.id);
-          await cardUpdater.finish(buildProductSpecReadyCard(productSpecRequest));
+          const flow = productSpecFlows.create({
+            taskId,
+            botId: config.id,
+            ownerOpenId: msg.senderOpenId,
+            ownerUnionId: msg.senderUnionId,
+            request: productSpecRequest,
+          });
+          await cardUpdater.finish(buildProductSpecApprovalCard(flow));
           await sendResultNotification({
             bot,
             replyToMessageId: msg.messageId,

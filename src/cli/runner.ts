@@ -56,6 +56,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     // Codex 的答案和用量可能出现在两条不同事件里，因此 Runner 需要暂存它们。
     let observedAnswer: string | undefined;
     let observedStats: CliRunResult['stats'];
+    const observedToolCalls = new Map<string, NonNullable<CliRunResult['toolCalls']>[number]>();
 
     let finalResult: CliRunResult | undefined;
     let resultError: Error | undefined;
@@ -84,6 +85,14 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
         }
         if (event.type === 'error') {
           resultError = new Error(event.message);
+          continue;
+        }
+        if (event.type === 'tool_call') {
+          observedToolCalls.set(event.toolUseId, event);
+          continue;
+        }
+        if (event.type === 'tool_end' && event.failed) {
+          observedToolCalls.delete(event.toolUseId);
           continue;
         }
         if (event.type === 'result') {
@@ -127,6 +136,13 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       }
       if (!finalResult) {
         return fail(new Error(`${adapter.displayName} 没有返回最终结果`));
+      }
+      if (observedToolCalls.size > 0) {
+        finalResult.toolCalls = [...observedToolCalls.values()].map((call) => ({
+          toolUseId: call.toolUseId,
+          toolName: call.toolName,
+          input: call.input,
+        }));
       }
       settled = true;
       finish();

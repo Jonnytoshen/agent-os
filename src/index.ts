@@ -16,6 +16,11 @@ import { compactCliSession } from './cli/native-compact';
 import { getCliAdapter, listCliAdapters } from './cli/registry';
 import { type BotConfig, buildBotPrompt, loadAgentOsConfig } from './core/bot-registry';
 import {
+  ClarificationFlowStore,
+  findClarificationRequest,
+  formatClarificationMessage,
+} from './core/clarification';
+import {
   CollaborationInbox,
   type CollaborationMessage,
   collaborationTurnKey,
@@ -26,10 +31,12 @@ import { JsonSessionStore } from './core/session-store';
 import type { ActiveRun } from './core/task-abort';
 import { TaskProgressTracker } from './core/task-progress';
 import { TeamRegistry } from './core/team-registry';
+import { topicTaskId } from './core/topic-task';
 import { ensureWorkspaceDirectory } from './core/workspace';
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildClarificationCard,
   buildCollaborationCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -62,6 +69,7 @@ const contextWindows = new Map<string, number>();
 const botRuntimes = new Map<string, AgentOSBotRuntime>();
 const processedCollaborationTurns = new Set<string>();
 const collaborationInbox = new CollaborationInbox();
+const clarificationFlows = new ClarificationFlowStore();
 const runtime: AgentOSRuntime = {
   sessions,
   teamRegistry,
@@ -70,6 +78,7 @@ const runtime: AgentOSRuntime = {
   botRuntimes,
   processedCollaborationTurns,
   collaborationInbox,
+  clarificationFlows,
 };
 
 console.log('Agent OS 启动，正在建立飞书长连接…');
@@ -153,6 +162,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
   const onCardAction = createCardActionHandler({ runtime, config });
   const onMessage: MessageReceiver = async (msg, bot) => {
     const resolved = resolveMentions(msg.text, msg.mentions);
+    const taskId = topicTaskId(msg);
     let senderRuntime: AgentOSBotRuntime | undefined;
     let collaboration: CollaborationMessage | undefined;
     if (msg.senderType === 'app' || msg.senderType === 'bot') {
@@ -195,6 +205,10 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       return;
     }
 
+    const pendingClarification =
+      msg.senderType !== 'app' && msg.senderType !== 'bot' && !command
+        ? clarificationFlows.findForTask(taskId, config.id)
+        : undefined;
     const resolvedSession = await sessions.resolve(
       msg,
       cliRequest?.cliId ?? config.defaultCliId,
@@ -208,7 +222,9 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     }
     const cliAdapter = getCliAdapter(session.cliId);
     const isCompacting = command?.name === 'compact';
-    const taskText = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
+    const taskText = pendingClarification
+      ? formatClarificationMessage(pendingClarification, cliRequest?.prompt ?? resolved)
+      : (collaboration?.prompt ?? cliRequest?.prompt ?? resolved);
     const prompt = buildBotPrompt(config, taskText, teamRegistry.contextFor(config.id));
     const taskCardTitle = isCompacting ? '整理上下文' : cliAdapter.displayName;
 
@@ -348,6 +364,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           answer: result.message ?? '',
           sessionId: result.sessionId,
           stats: undefined,
+          toolCalls: undefined,
         }))
       : executeCli(
           cliAdapter,
@@ -375,6 +392,37 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         }
         if (!isCompacting && result.stats?.contextWindowTokens) {
           contextWindows.set(session.id, result.stats.contextWindowTokens);
+        }
+        const clarificationRequest =
+          !isCompacting && config.skills.includes('grill-me')
+            ? findClarificationRequest(result.toolCalls)
+            : undefined;
+        if (clarificationRequest) {
+          const flow = clarificationFlows.create({
+            taskId,
+            botId: config.id,
+            sessionId: session.id,
+            ownerOpenId: msg.senderOpenId,
+            ownerUnionId: msg.senderUnionId,
+            originalMessageId: msg.messageId,
+            cardMessageId: cardId,
+            replyInThread: hasThread,
+            request: clarificationRequest,
+          });
+          if (activeRuns.get(session.id)?.controller === run) {
+            activeRuns.delete(session.id);
+          }
+          await markSessionIdle(sessions, session.id);
+          await cardUpdater.finish(buildClarificationCard({ flow }));
+          await sendResultNotification({
+            bot,
+            replyToMessageId: msg.messageId,
+            target: { openId: flow.ownerOpenId, name: '' },
+            text: `需要你确认 ${clarificationRequest.questions.length} 个问题，请在上方卡片中选择。`,
+            replyInThread: hasThread,
+          });
+          console.log(`[澄清] 已发送交互卡片 questions=${clarificationRequest.questions.length}`);
+          return;
         }
         const snapshot = progress.snapshot();
         await cardUpdater.finish(
@@ -416,7 +464,9 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
             replyInThread: hasThread,
           });
         }
-        if (!isCompacting) {
+
+        // 产品澄清在本节停在产品结论，不自动进入后续团队编排。
+        if (!isCompacting && !config.skills.includes('grill-me')) {
           try {
             if (collaboration && collaboration.round < collaboration.maxRounds) {
               await sendCollaborationMessage({

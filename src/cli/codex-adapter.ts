@@ -1,6 +1,7 @@
 import { isRecord } from '../utils/check';
 import { asNumber } from '../utils/number';
 import { shortText } from '../utils/text';
+import { CLARIFICATION_TOOL_NAME, codexAppToolArgs } from './app-tools';
 import type { CliAdapter, CliPromptInput, CliEvent, CliRunStats, CliCompactPlan } from './types';
 
 interface CodexEvent {
@@ -79,7 +80,7 @@ export class CodexAdapter implements CliAdapter {
   readonly displayName = 'Codex';
 
   buildArgs(prompt: string, promptInput: CliPromptInput): string[] {
-    const args = ['exec', '--json', '--skip-git-repo-check'];
+    const args = [...codexAppToolArgs(), 'exec', '--json', '--skip-git-repo-check'];
     // Windows 上沙箱功能不支持，必须完全禁用；approvals 也一并绕过。
     if (process.platform === 'win32') {
       args.push('--dangerously-bypass-approvals-and-sandbox');
@@ -92,7 +93,14 @@ export class CodexAdapter implements CliAdapter {
   }
 
   buildResumeArgs(prompt: string, sessionId: string, promptInput: CliPromptInput): string[] {
-    const args = ['exec', 'resume', '--json', '--skip-git-repo-check', sessionId];
+    const args = [
+      ...codexAppToolArgs(),
+      'exec',
+      'resume',
+      '--json',
+      '--skip-git-repo-check',
+      sessionId,
+    ];
     // Windows 上沙箱功能不支持，必须完全禁用。
     if (process.platform === 'win32') {
       args.push('--dangerously-bypass-approvals-and-sandbox');
@@ -150,13 +158,26 @@ export class CodexAdapter implements CliAdapter {
     const tool = toolInfo(item);
     if (!tool) return [];
     if (event.type === 'item.started') {
-      return [
+      const events: CliEvent[] = [
         {
           type: 'tool_start',
           toolUseId: item.id,
           ...tool,
         },
       ];
+      if (
+        item.type === 'mcp_tool_call' &&
+        item.server === 'agent_os' &&
+        item.tool === CLARIFICATION_TOOL_NAME
+      ) {
+        events.push({
+          type: 'tool_call',
+          toolUseId: item.id,
+          toolName: CLARIFICATION_TOOL_NAME,
+          input: item.arguments ?? item.input,
+        });
+      }
+      return events;
     }
     if (event.type === 'item.completed') {
       const exitCode = asNumber(item.exit_code);

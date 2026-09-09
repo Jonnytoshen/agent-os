@@ -1,0 +1,4 @@
+allowBuilds:
+  # 明确允许 esbuild 和 protobufjs 执行安装脚本
+  esbuild: true
+  protobufjs: true

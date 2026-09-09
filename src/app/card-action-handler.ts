@@ -1,9 +1,15 @@
 import { listNativeCliSessions } from '../cli/native-sessions';
 import { getCliAdapter } from '../cli/registry';
 import { BotConfig } from '../core/bot-registry';
+import { isClarificationOwner } from '../core/clarification';
 import { requestTaskAbort } from '../core/task-abort';
-import { buildResumeCard } from '../im/card';
+import {
+  buildClarificationCard,
+  buildClarificationContinuingCard,
+  buildResumeCard,
+} from '../im/card';
 import type { CardAction, CardActionResponse } from '../im/lark';
+import { continueClarificationFlow } from './clarification-runner';
 import { AgentOSRuntime } from './runtime';
 
 /**
@@ -18,6 +24,107 @@ export function createCardActionHandler(options: {
 }): (action: CardAction) => Promise<CardActionResponse | undefined> {
   const { runtime, config } = options;
   return async (action) => {
+    // 处理澄清问题的回答动作
+    if (action.value.action === 'answer_clarification') {
+      const flowToken = typeof action.value.flowToken === 'string' ? action.value.flowToken : '';
+      const questionId = typeof action.value.questionId === 'string' ? action.value.questionId : '';
+      const flow = runtime.clarificationFlows.get(flowToken);
+      if (!flow || flow.botId !== config.id || !action.messageId) {
+        return { toast: { type: 'error', content: '这组澄清问题已经失效。' } };
+      }
+      if (!isClarificationOwner(flow, action)) {
+        return { toast: { type: 'warning', content: '只有任务发起人可以回答。' } };
+      }
+
+      const question = flow.request.questions[flow.currentIndex];
+      if (!question || question.id !== questionId) {
+        return { toast: { type: 'warning', content: '问题已经更新，请按当前卡片作答。' } };
+      }
+
+      const decisionMode =
+        action.value.decisionMode === 'current' || action.value.decisionMode === 'remaining'
+          ? action.value.decisionMode
+          : undefined;
+      let answered;
+      if (decisionMode) {
+        answered = runtime.clarificationFlows.answerWithRecommendation(
+          flowToken,
+          decisionMode === 'remaining',
+        );
+      } else {
+        const custom = action.value.custom === true;
+        const optionId = typeof action.value.optionId === 'string' ? action.value.optionId : '';
+        const selectedOption = question.options.find((option) => option.id === optionId);
+        const customAnswer =
+          typeof action.formValue.custom_answer === 'string'
+            ? action.formValue.custom_answer.trim()
+            : '';
+        const answer = custom ? customAnswer : (selectedOption?.label ?? '');
+        if (!answer) {
+          return {
+            toast: {
+              type: 'warning',
+              content: custom ? '请先输入你的答案。' : '这个选项已经失效。',
+            },
+          };
+        }
+        answered = runtime.clarificationFlows.answer(flowToken, questionId, answer);
+      }
+      if (!answered) {
+        return { toast: { type: 'warning', content: '答案没有保存，请重试。' } };
+      }
+      if (!answered.complete) {
+        return {
+          toast: { type: 'success', content: '已记录，继续下一题。' },
+          card: {
+            type: 'raw',
+            data: buildClarificationCard({ flow: answered.flow }),
+          },
+        };
+      }
+
+      const session = runtime.sessions.get(answered.flow.sessionId);
+      const botRuntime = runtime.botRuntimes.get(config.id);
+      if (!session || !botRuntime || session.status === 'closed') {
+        return { toast: { type: 'error', content: '对应的 CLI 会话已经失效。' } };
+      }
+      if (session.status === 'active') {
+        return { toast: { type: 'warning', content: '当前会话仍在执行，请稍后重试。' } };
+      }
+
+      try {
+        await runtime.sessions.transition(session.id, 'active');
+        const run = new AbortController();
+        runtime.activeRuns.set(session.id, {
+          controller: run,
+          ownerOpenId: answered.flow.ownerOpenId,
+        });
+        runtime.clarificationFlows.delete(flowToken);
+        // 不会创建新线程。
+        // 它让当前回调先把 toast 和新卡片交给飞书，随后仍在同一个 Node.js 进程里启动异步 CLI 工作。
+        queueMicrotask(() => {
+          void continueClarificationFlow({
+            runtime,
+            bot: botRuntime.bot,
+            config,
+            flow: answered.flow,
+            run,
+          }).catch((error) => {
+            console.error('[澄清] 继续执行失败:', (error as Error).message);
+          });
+        });
+        return {
+          toast: { type: 'success', content: '答案已收到。' },
+          card: {
+            type: 'raw',
+            data: buildClarificationContinuingCard(answered.flow),
+          },
+        };
+      } catch (error) {
+        return { toast: { type: 'error', content: (error as Error).message } };
+      }
+    }
+
     // 从历史列表恢复 CLI 会话
     if (action.value.action === 'resume_cli_session') {
       const agentSessionId =

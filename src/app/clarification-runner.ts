@@ -5,11 +5,13 @@ import {
   findClarificationRequest,
   formatClarificationAnswers,
 } from '../core/clarification';
+import { findProductSpecRequest } from '../core/product-spec';
 import { TaskProgressTracker } from '../core/task-progress';
 import {
   answerContinuation,
   answerNeedsContinuation,
   buildClarificationCard,
+  buildProductSpecReadyCard,
   buildTaskCard,
   splitLongText,
   ThrottledCardUpdater,
@@ -17,12 +19,13 @@ import {
 import { AgentOSBot } from '../im/lark';
 import { executeCli } from './cli-execution';
 import { sendResultNotification } from './notification-service';
+import { assertProductSpecDocuments } from './product-spec-documents';
 import type { AgentOSRuntime } from './runtime';
 import { markSessionIdle } from './session-view';
 
 /**
- * 继续执行需求澄清流程。
- * @param options 执行选项，包括运行时、机器人、配置、澄清流程和中止控制器。
+ * 继续执行澄清问题的流程，直到所有问题都被回答。
+ * @param options 选项，包括运行时、机器人、配置、澄清流程和中止控制器。
  */
 export async function continueClarificationFlow(options: {
   runtime: AgentOSRuntime;
@@ -113,6 +116,22 @@ export async function continueClarificationFlow(options: {
         replyToMessageId: flow.originalMessageId,
         target: { openId: flow.ownerOpenId, name: '' },
         text: `还需要确认 ${nextRequest.questions.length} 个问题，请在上方卡片中选择。`,
+        replyInThread: flow.replyInThread,
+      });
+      return;
+    }
+
+    const productSpecRequest = config.skills.includes('to-spec')
+      ? findProductSpecRequest(result.toolCalls)
+      : undefined;
+    if (productSpecRequest) {
+      await assertProductSpecDocuments(session.workspaceDir, productSpecRequest);
+      await cardUpdater.finish(buildProductSpecReadyCard(productSpecRequest));
+      await sendResultNotification({
+        bot,
+        replyToMessageId: flow.originalMessageId,
+        target: { openId: flow.ownerOpenId, name: '' },
+        text: 'Spec 和 Tickets 已经落盘，请查看上方产物卡片。',
         replyInThread: flow.replyInThread,
       });
       return;

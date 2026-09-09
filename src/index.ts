@@ -10,6 +10,7 @@ import { createCardActionHandler } from './app/card-action-handler';
 import { executeCli } from './app/cli-execution';
 import { handleSessionCommand } from './app/command-handler';
 import { sendResultNotification } from './app/notification-service';
+import { assertProductSpecDocuments } from './app/product-spec-documents';
 import type { AgentOSBotRuntime, AgentOSRuntime } from './app/runtime';
 import { markSessionIdle } from './app/session-view';
 import { compactCliSession } from './cli/native-compact';
@@ -26,6 +27,7 @@ import {
   collaborationTurnKey,
 } from './core/collaboration';
 import { parseCliRequest, parseCommand } from './core/command-parser';
+import { findProductSpecRequest } from './core/product-spec';
 import { SessionManager } from './core/session-manager';
 import { JsonSessionStore } from './core/session-store';
 import type { ActiveRun } from './core/task-abort';
@@ -38,6 +40,7 @@ import {
   answerNeedsContinuation,
   buildClarificationCard,
   buildCollaborationCard,
+  buildProductSpecReadyCard,
   buildSessionNoticeCard,
   buildTaskCard,
   splitLongText,
@@ -422,6 +425,27 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
             replyInThread: hasThread,
           });
           console.log(`[澄清] 已发送交互卡片 questions=${clarificationRequest.questions.length}`);
+          return;
+        }
+        const productSpecRequest =
+          !isCompacting && config.skills.includes('to-spec')
+            ? findProductSpecRequest(result.toolCalls)
+            : undefined;
+        if (productSpecRequest) {
+          await assertProductSpecDocuments(session.workspaceDir, productSpecRequest);
+          if (activeRuns.get(session.id)?.controller === run) {
+            activeRuns.delete(session.id);
+          }
+          await markSessionIdle(sessions, session.id);
+          await cardUpdater.finish(buildProductSpecReadyCard(productSpecRequest));
+          await sendResultNotification({
+            bot,
+            replyToMessageId: msg.messageId,
+            target: { openId: msg.senderOpenId, name: '' },
+            text: 'Spec 和 Tickets 已经落盘，请查看上方产物卡片。',
+            replyInThread: hasThread,
+          });
+          console.log('[产品文档] 已展示待确认产物');
           return;
         }
         const snapshot = progress.snapshot();

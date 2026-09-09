@@ -1,7 +1,12 @@
 import { isRecord } from '../utils/check';
 import { asNumber } from '../utils/number';
 import { shortText } from '../utils/text';
-import { CLAUDE_CLARIFICATION_TOOL_NAME, claudeAppToolArgs } from './app-tools';
+import {
+  CLAUDE_CLARIFICATION_TOOL_NAME,
+  CLAUDE_PRODUCT_SPEC_TOOL_NAME,
+  claudeAppToolArgs,
+  PRODUCT_SPEC_TOOL_NAME,
+} from './app-tools';
 import {
   type CliAdapter,
   type CliPromptInput,
@@ -192,6 +197,14 @@ export class ClaudeAdapter implements CliAdapter {
             type: 'tool_call',
             toolUseId: block.id,
             toolName: 'request_clarification',
+            input: block.input,
+          });
+        }
+        if (block.name === CLAUDE_PRODUCT_SPEC_TOOL_NAME) {
+          events.push({
+            type: 'tool_call',
+            toolUseId: block.id,
+            toolName: PRODUCT_SPEC_TOOL_NAME,
             input: block.input,
           });
         }

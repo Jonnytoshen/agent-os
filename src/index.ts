@@ -10,7 +10,9 @@ import { createCardActionHandler } from './app/card-action-handler';
 import { executeCli } from './app/cli-execution';
 import { handleSessionCommand } from './app/command-handler';
 import { sendResultNotification } from './app/notification-service';
+import { runProductDocumentComment } from './app/product-comment-runner';
 import { assertProductSpecDocuments } from './app/product-spec-documents';
+import { ensureProductSpecSubmission } from './app/product-spec-submission';
 import type { AgentOSBotRuntime, AgentOSRuntime } from './app/runtime';
 import { markSessionIdle } from './app/session-view';
 import { compactCliSession } from './cli/native-compact';
@@ -27,7 +29,8 @@ import {
   collaborationTurnKey,
 } from './core/collaboration';
 import { parseCliRequest, parseCommand } from './core/command-parser';
-import { findProductSpecRequest, ProductSpecFlowStore } from './core/product-spec';
+import type { ProductSpecRequest } from './core/product-spec';
+import { JsonProductSpecFlowStore } from './core/product-spec-store';
 import { SessionManager } from './core/session-manager';
 import { JsonSessionStore } from './core/session-store';
 import type { ActiveRun } from './core/task-abort';
@@ -46,7 +49,12 @@ import {
   splitLongText,
   ThrottledCardUpdater,
 } from './im/card';
-import { AgentOSBot, type MessageReceiver } from './im/lark';
+import {
+  AgentOSBot,
+  DocumentCommentHandler,
+  IncomingDocumentComment,
+  type MessageReceiver,
+} from './im/lark';
 import { extractResourceKeys, resolveMentions } from './im/message-parser';
 
 const botConfigPath = resolve(process.env.BOTS_CONFIG ?? join('config', 'bots.json'));
@@ -73,7 +81,10 @@ const botRuntimes = new Map<string, AgentOSBotRuntime>();
 const processedCollaborationTurns = new Set<string>();
 const collaborationInbox = new CollaborationInbox();
 const clarificationFlows = new ClarificationFlowStore();
-const productSpecFlows = new ProductSpecFlowStore();
+const productSpecFlows = new JsonProductSpecFlowStore(join('data', 'product-spec-flows.json'));
+const processedDocumentCommentEvents = new Set<string>();
+const documentCommentQueues = new Map<string, Promise<void>>();
+const MAX_REMEMBERED_DOCUMENT_COMMENT_EVENTS = 1_000;
 const runtime: AgentOSRuntime = {
   sessions,
   teamRegistry,
@@ -164,7 +175,14 @@ async function sendCollaborationMessage(options: {
 }
 
 async function startConfiguredBot(config: BotConfig): Promise<void> {
-  const onCardAction = createCardActionHandler({ runtime, config });
+  const onCardAction = createCardActionHandler({
+    runtime,
+    config,
+    defaultProductDeliveryMode: agentOsConfig.defaultProductDeliveryMode,
+  });
+  const onDocumentComment: DocumentCommentHandler | undefined = config.skills.includes('lark-drive')
+    ? async (comment, bot) => scheduleDocumentComment(config, bot, comment)
+    : undefined;
   const onMessage: MessageReceiver = async (msg, bot) => {
     const resolved = resolveMentions(msg.text, msg.mentions);
     const taskId = topicTaskId(msg);
@@ -429,10 +447,43 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           console.log(`[澄清] 已发送交互卡片 questions=${clarificationRequest.questions.length}`);
           return;
         }
-        const productSpecRequest =
-          !isCompacting && (config.skills.includes('to-spec') || config.skills.includes('lark-doc'))
-            ? findProductSpecRequest(result.toolCalls)
-            : undefined;
+        let finalResult = result;
+        let productSpecRequest: ProductSpecRequest | undefined;
+        const managesProductSpec =
+          !isCompacting &&
+          (config.skills.includes('to-spec') || config.skills.includes('lark-doc'));
+        if (managesProductSpec) {
+          const submission = await ensureProductSpecSubmission({
+            result,
+            defaultDeliveryMode: agentOsConfig.defaultProductDeliveryMode,
+            retry: (retryPrompt, resultSessionId) =>
+              executeCli(
+                cliAdapter,
+                retryPrompt,
+                session.workspaceDir,
+                resultSessionId ?? session.cliSessionId,
+                run.signal,
+                (event) => {
+                  if (
+                    event.type !== 'tool_start' &&
+                    event.type !== 'tool_end' &&
+                    event.type !== 'context'
+                  )
+                    return;
+                  progress.accept(event);
+                  renderProgress();
+                },
+              ),
+          });
+          finalResult = submission.result;
+          productSpecRequest = submission.request;
+          if (finalResult.sessionId) {
+            await sessions.setCliSessionId(session.id, finalResult.sessionId);
+          }
+          if (finalResult.stats?.contextWindowTokens) {
+            contextWindows.set(session.id, finalResult.stats.contextWindowTokens);
+          }
+        }
         if (productSpecRequest) {
           if (productSpecRequest.deliveryMode === 'local') {
             await assertProductSpecDocuments(session.workspaceDir, productSpecRequest);
@@ -444,6 +495,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           const flow = productSpecFlows.create({
             taskId,
             botId: config.id,
+            sessionId: session.id,
             ownerOpenId: msg.senderOpenId,
             ownerUnionId: msg.senderUnionId,
             request: productSpecRequest,
@@ -620,14 +672,93 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     appId: config.appId,
     appSecret: config.appSecret,
     onCardAction,
+    onDocumentComment,
     onMessage,
   });
   const identity = await startedBot.getIdentity();
   const botRuntime = { config, bot: startedBot, identity };
   botRuntimes.set(config.id, botRuntime);
+  if (config.skills.includes('lark-drive')) {
+    await startedBot.subscribeToDocumentComments();
+  }
   console.log(
     `[Bot ${config.id.toUpperCase()}] 已连接 name=${identity.name} open_id=${identity.openId}`,
   );
+}
+
+/**
+ * 处理飞书文档评论，执行产品说明的更新。
+ * 同一 session 的多条评论会顺序执行，避免两个任务同时续接同一个 CLI 会话。
+ * 事件去重集合只保留最近 1000 条，长期运行时不会无限增长。
+ * @param config bot 配置
+ * @param bot bot 实例
+ * @param comment 飞书文档评论信息
+ */
+function scheduleDocumentComment(
+  config: BotConfig,
+  bot: AgentOSBot,
+  comment: IncomingDocumentComment,
+): void {
+  if (!comment.mentionedBot) return;
+  const flow = productSpecFlows.findPendingByDocument(config.id, comment.fileToken);
+  if (!flow) {
+    console.log(`[产品评论] 忽略未关联待确认方案的评论 file=${comment.fileToken}`);
+    return;
+  }
+
+  const eventKey =
+    comment.eventId || [comment.fileToken, comment.commentId, comment.replyId].join(':');
+  if (processedDocumentCommentEvents.has(eventKey)) return;
+  rememberDocumentCommentEvent(eventKey);
+
+  const workingReaction = bot
+    .setDocumentCommentWorking(comment, true)
+    .then(() => true)
+    .catch((error) => {
+      console.warn('[产品评论] 添加处理中表情失败，继续执行:', (error as Error).message);
+      return false;
+    });
+  const previous = documentCommentQueues.get(flow.sessionId) ?? Promise.resolve();
+  const queued = Promise.all([previous.catch(() => undefined), workingReaction]).then(
+    async ([, reactionAdded]) => {
+      try {
+        await runProductDocumentComment({
+          runtime,
+          bot,
+          flow,
+          comment,
+        });
+      } finally {
+        if (reactionAdded) {
+          await bot.setDocumentCommentWorking(comment, false).catch((error) => {
+            console.warn('[产品评论] 移除处理中表情失败:', (error as Error).message);
+          });
+        }
+      }
+    },
+  );
+  documentCommentQueues.set(flow.sessionId, queued);
+  void queued
+    .catch((error) => {
+      console.error('[产品评论] 处理失败:', (error as Error).message);
+      return bot
+        .replyToDocumentComment(comment, `这条评论暂时没有处理完成：${(error as Error).message}`)
+        .catch((replyError) => {
+          console.error('[产品评论] 回写失败:', (replyError as Error).message);
+        });
+    })
+    .finally(() => {
+      if (documentCommentQueues.get(flow.sessionId) === queued) {
+        documentCommentQueues.delete(flow.sessionId);
+      }
+    });
+}
+
+function rememberDocumentCommentEvent(eventKey: string): void {
+  processedDocumentCommentEvents.add(eventKey);
+  if (processedDocumentCommentEvents.size <= MAX_REMEMBERED_DOCUMENT_COMMENT_EVENTS) return;
+  const oldest = processedDocumentCommentEvents.values().next().value;
+  if (oldest) processedDocumentCommentEvents.delete(oldest);
 }
 
 await Promise.all(botConfigs.map(startConfiguredBot));

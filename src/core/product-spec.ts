@@ -24,8 +24,8 @@ const ProductSpecBaseSchema = z.object({
 const LarkDocumentUrlSchema = z
   .url()
   .refine(
-    (value) => /\/(?:docx|wiki)\//.test(new URL(value).pathname),
-    'documentUrl 必须是飞书云文档或知识库文档链接',
+    (value) => /\/docx\//.test(new URL(value).pathname),
+    'documentUrl 必须是飞书 Docx 文档链接',
   );
 
 export const LocalProductSpecRequestSchema = ProductSpecBaseSchema.extend({
@@ -59,6 +59,7 @@ export interface ProductSpecFlow {
   token: string;
   taskId: string;
   botId: string;
+  sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
   request: ProductSpecRequest;
@@ -69,6 +70,7 @@ export interface ProductSpecFlow {
 export interface CreateProductSpecFlowOptions {
   taskId: string;
   botId: string;
+  sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
   request: ProductSpecRequest;
@@ -115,6 +117,12 @@ export function isProductSpecOwner(
 export class ProductSpecFlowStore {
   private readonly flows = new Map<string, ProductSpecFlow>();
 
+  constructor(initialFlows: ProductSpecFlow[] = []) {
+    for (const flow of initialFlows) {
+      this.flows.set(flow.token, flow);
+    }
+  }
+
   /**
    * 创建一个新的产品说明审批流程。
    * 如果同一任务已经存在未审批的流程，会将其标记为过期。
@@ -150,6 +158,25 @@ export class ProductSpecFlowStore {
   }
 
   /**
+   * 根据机器人 ID 和文档令牌查找未审批的产品说明审批流程。
+   * @param botId 机器人 ID
+   * @param fileToken 文档令牌
+   * @returns 产品说明审批流程，或 undefined
+   */
+  findPendingByDocument(botId: string, fileToken: string): ProductSpecFlow | undefined {
+    for (const flow of this.flows.values()) {
+      if (
+        flow.botId === botId &&
+        flow.status === 'pending' &&
+        flow.request.deliveryMode === 'lark-doc' &&
+        documentToken(flow.request.documentUrl) === fileToken
+      )
+        return flow;
+    }
+    return undefined;
+  }
+
+  /**
    * 审批一个产品说明审批流程，将其状态更新为 approved，并记录审批时间。
    * @param token 流程令牌
    * @returns 审批后的产品说明审批流程，或 undefined
@@ -161,4 +188,28 @@ export class ProductSpecFlowStore {
     flow.approvedAt = new Date().toISOString();
     return flow;
   }
+
+  /**
+   * 获取所有产品说明审批流程的快照。
+   * @returns 产品说明审批流程数组
+   */
+  protected snapshot(): ProductSpecFlow[] {
+    return structuredClone([...this.flows.values()]);
+  }
+
+  /**
+   * 恢复产品说明审批流程的快照。
+   * @param flows 产品说明审批流程数组
+   */
+  protected restore(flows: ProductSpecFlow[]): void {
+    this.flows.clear();
+    for (const flow of flows) {
+      this.flows.set(flow.token, flow);
+    }
+  }
+}
+
+function documentToken(documentUrl: string): string | undefined {
+  const match = /^\/docx\/([A-Za-z0-9_-]+)\/?$/.exec(new URL(documentUrl).pathname);
+  return match?.[1];
 }

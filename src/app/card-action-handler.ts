@@ -1,6 +1,6 @@
 import { listNativeCliSessions } from '../cli/native-sessions';
 import { getCliAdapter } from '../cli/registry';
-import { BotConfig } from '../core/bot-registry';
+import type { BotConfig, ProductDeliveryMode } from '../core/bot-registry';
 import { isClarificationOwner } from '../core/clarification';
 import { isProductSpecOwner } from '../core/product-spec';
 import { requestTaskAbort } from '../core/task-abort';
@@ -13,7 +13,7 @@ import {
 } from '../im/card';
 import type { CardAction, CardActionResponse } from '../im/lark';
 import { continueClarificationFlow } from './clarification-runner';
-import { AgentOSRuntime } from './runtime';
+import type { AgentOSRuntime } from './runtime';
 
 /**
  * 创建卡片动作处理器。
@@ -24,8 +24,9 @@ import { AgentOSRuntime } from './runtime';
 export function createCardActionHandler(options: {
   runtime: AgentOSRuntime;
   config: BotConfig;
+  defaultProductDeliveryMode: ProductDeliveryMode;
 }): (action: CardAction) => Promise<CardActionResponse | undefined> {
-  const { runtime, config } = options;
+  const { runtime, config, defaultProductDeliveryMode } = options;
   return async (action) => {
     // 处理产品说明审批动作
     if (action.value.action === 'approve_product_spec') {
@@ -152,6 +153,7 @@ export function createCardActionHandler(options: {
             config,
             flow: answered.flow,
             run,
+            defaultDeliveryMode: defaultProductDeliveryMode,
           }).catch((error) => {
             console.error('[澄清] 继续执行失败:', (error as Error).message);
           });

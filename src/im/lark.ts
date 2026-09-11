@@ -24,11 +24,22 @@ export interface IncomingMessage {
   rawContent: string;
 }
 
+export interface IncomingDocumentComment {
+  eventId: string;
+  fileToken: string;
+  fileType: string;
+  commentId: string;
+  replyId: string;
+  senderOpenId: string;
+  senderUnionId: string;
+  mentionedBot: boolean;
+}
 export interface AgentOSBotOptions {
   appId: string;
   appSecret: string;
   onMessage?: MessageReceiver;
   onCardAction?: CardActionHandler;
+  onDocumentComment?: DocumentCommentHandler;
 }
 
 export interface BotIdentity {
@@ -36,9 +47,26 @@ export interface BotIdentity {
   name: string;
 }
 
+export const FEISHU_TEXT_LIMIT = 3_000;
+export const FEISHU_MENTION_LIMIT = 1_200;
+export const FEISHU_COMMENT_LIMIT = 1_000;
+
+export function fitFeishuText(text: string, maxLength: number): string {
+  const characters = Array.from(text);
+  if (characters.length <= maxLength) return text;
+  const suffix = '\n\n（内容过长，已截断。详细内容请写入文档或工作区文件。）';
+  const suffixLength = Array.from(suffix).length;
+  return `${characters.slice(0, Math.max(0, maxLength - suffixLength)).join('')}${suffix}`;
+}
+
 export type MessageReceiver = (msg: IncomingMessage, bot: AgentOSBot) => Promise<void>;
 
 export type CardActionHandler = (action: CardAction) => Promise<CardActionResponse | undefined>;
+
+export type DocumentCommentHandler = (
+  comment: IncomingDocumentComment,
+  bot: AgentOSBot,
+) => Promise<void>;
 
 export interface CardAction {
   operatorOpenId: string;
@@ -122,7 +150,7 @@ export class AgentOSBot {
   readonly client: Lark.Client;
 
   constructor(options: AgentOSBotOptions) {
-    const { appId, appSecret, onMessage, onCardAction } = options;
+    const { appId, appSecret, onMessage, onCardAction, onDocumentComment } = options;
 
     // `Lark.Client` 管出。所有主动调 API 的动作——发消息、回消息、以后的传图片、改卡片都走它。
     // 它拿着 App ID 和 Secret 自己维护鉴权 token，不用操心过期刷新。
@@ -154,6 +182,24 @@ export class AgentOSBot {
           await onMessage(msg, this);
         }
       },
+      'drive.notice.comment_add_v1': async (data) => {
+        if (!onDocumentComment) return;
+        const meta = data.notice_meta;
+        if (!meta?.file_token || !meta.file_type || !data.comment_id) return;
+        await onDocumentComment(
+          {
+            eventId: data.event_id ?? '',
+            fileToken: meta.file_token,
+            fileType: meta.file_type,
+            commentId: data.comment_id,
+            replyId: data.reply_id ?? '',
+            senderOpenId: meta.from_user_id?.open_id ?? '',
+            senderUnionId: meta.from_user_id?.union_id ?? '',
+            mentionedBot: data.is_mentioned ?? false,
+          },
+          this,
+        );
+      },
     });
 
     // `Lark.WSClient` 管进。它负责建立并维持那条 `WebSocket` 长连接，断了自动重连。
@@ -183,7 +229,9 @@ export class AgentOSBot {
       path: { message_id: messageId },
       data: {
         msg_type: 'text',
-        content: JSON.stringify({ text }),
+        content: JSON.stringify({
+          text: fitFeishuText(text, FEISHU_TEXT_LIMIT),
+        }),
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
@@ -245,6 +293,78 @@ export class AgentOSBot {
   }
 
   /**
+   * 订阅飞书文档评论事件。
+   * 订阅后，飞书会在有新的评论或回复时推送事件到 Bot 的长连接。
+   */
+  async subscribeToDocumentComments(): Promise<void> {
+    const response = await this.client.drive.v1.user.subscription({
+      data: { event_type: 'drive.notice.comment_add_v1' },
+    });
+    if (response.code && response.code !== 0) {
+      throw new Error(response.msg || '订阅飞书文档评论事件失败');
+    }
+  }
+
+  /**
+   * 回复飞书文档评论。
+   *
+   * @param comment 要回复的评论信息
+   * @param text 回复的文本内容
+   */
+  async replyToDocumentComment(comment: IncomingDocumentComment, text: string): Promise<void> {
+    const response = await this.client.drive.v1.fileCommentReply.create({
+      path: {
+        file_token: comment.fileToken,
+        comment_id: comment.commentId,
+      },
+      params: {
+        file_type: comment.fileType as 'doc' | 'docx' | 'sheet' | 'file' | 'slides' | 'bitable',
+        user_id_type: 'open_id',
+      },
+      data: {
+        content: {
+          elements: [
+            {
+              type: 'text_run',
+              text_run: {
+                text: fitFeishuText(text, FEISHU_COMMENT_LIMIT),
+              },
+            },
+          ],
+        },
+      },
+    });
+    if (response.code && response.code !== 0) {
+      throw new Error(response.msg || '回复飞书文档评论失败');
+    }
+  }
+
+  /**
+   * 设置飞书文档评论的工作状态（正在输入）。
+   *
+   * @param comment 要设置状态的评论信息
+   * @param active 是否激活工作状态（true 表示正在输入，false 表示停止输入）
+   */
+  async setDocumentCommentWorking(
+    comment: IncomingDocumentComment,
+    active: boolean,
+  ): Promise<void> {
+    const replyId = comment.replyId || (await findRootCommentReplyId(this.client, comment));
+    const response = await this.client.drive.v2.commentReaction.updateReaction({
+      path: { file_token: comment.fileToken },
+      params: { file_type: comment.fileType },
+      data: {
+        action: active ? 'add' : 'delete',
+        reply_id: replyId,
+        reaction_type: 'Typing',
+      },
+    });
+    if (response.code && response.code !== 0) {
+      throw new Error(response.msg || '更新飞书文档评论状态失败');
+    }
+  }
+
+  /**
    * 下载图片/文件资源到本地。
    *
    * @param messageId 消息 ID
@@ -272,6 +392,38 @@ export class AgentOSBot {
     await res.writeFile(savePath);
     return savePath;
   }
+}
+
+/**
+ * 查找飞书文档评论的根回复 ID。
+ * 飞书文档评论的回复是分层的，根回复是最顶层的回复。
+ * 这个函数会调用飞书 API 获取评论的回复列表，并返回第一个回复的 ID。
+ *
+ * @param client 飞书客户端实例
+ * @param comment 要查找的评论信息
+ * @returns 根回复 ID
+ */
+async function findRootCommentReplyId(
+  client: Lark.Client,
+  comment: IncomingDocumentComment,
+): Promise<string> {
+  const response = await client.drive.v1.fileCommentReply.list({
+    path: {
+      file_token: comment.fileToken,
+      comment_id: comment.commentId,
+    },
+    params: {
+      file_type: comment.fileType as 'doc' | 'docx' | 'sheet' | 'file' | 'slides' | 'bitable',
+      page_size: 1,
+      user_id_type: 'open_id',
+    },
+  });
+  if (response.code && response.code !== 0) {
+    throw new Error(response.msg || '读取飞书文档评论回复失败');
+  }
+  const replyId = response.data?.items?.[0]?.reply_id;
+  if (!replyId) throw new Error('飞书文档评论缺少可添加表情的回复 ID');
+  return replyId;
 }
 
 const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {

@@ -30,3 +30,5 @@ This repository enforces its commit convention with commitlint.
 ## 错题本
 
 > 踩坑后追加一行：现象 → 原因 → 正确做法。给未来的 AI 和人看。
+
+- 调试时用 `NODE_OPTIONS='--inspect' pnpm start` 附加调试器，子进程报 `Starting inspector ... failed: address already in use`，断点永远打不中 → `tsx watch` 是父进程，它先占了 inspect 端口，真正跑代码的子进程抢不到 → 用 `node --import tsx src/index.ts`（单进程，断点可直接命中）；需要热重载时用 `node --watch --import tsx src/index.ts`。

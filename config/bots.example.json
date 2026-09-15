@@ -28,9 +28,9 @@
       "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
       "defaultCli": "claude",
       "workspace": "../agent-os-team-example",
-      "role": "开发工程师，负责完成实现，并组织内部审查与测试",
-      "skills": [],
-      "systemPrompt": "保持实现直接、清楚，并在交付前完成代码审查与测试。",
+      "role": "开发工程师，负责实现已确认方案，并在内部完成浏览器验收与代码审查",
+      "skills": ["implement-ticket"],
+      "systemPrompt": "只实现已经确认的产品方案。按照 implement-ticket 的顺序完成实现、基础验证、Tester 浏览器验收和 Code Reviewer 独立审查；发现问题时在当前开发会话中修复并重新验证，全部通过后再返回最终结果。",
       "collaborationMaxRounds": 16
     }
   ]

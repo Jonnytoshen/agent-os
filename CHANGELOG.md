@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.5.0 (2026-09-16)
+
+### 🚀 Features
+
+* add lark doc, drive and code review skills ([ca3b141](https://github.com/Jonnytoshen/agent-os/commit/ca3b141333aeac17f56fa983485ffbe7b25ea3b5))
+* add spec, ticket and implementation skills ([45c87d2](https://github.com/Jonnytoshen/agent-os/commit/45c87d2fad003a5ee8c6b70ce3da57772b66c197))
+* **core:** ask for clarification through interactive Feishu cards ([fa1a2f5](https://github.com/Jonnytoshen/agent-os/commit/fa1a2f5e794c4cdb910929203e8fdf61bd513c45))
+* **core:** organize bots into a team with leader and skills ([1d3de60](https://github.com/Jonnytoshen/agent-os/commit/1d3de608775d2d5ccac45c1be7db8af995462357))
+* **core:** submit product specs and tickets for user approval ([bd862fa](https://github.com/Jonnytoshen/agent-os/commit/bd862fa8d87115a1fd83c3487dae6f625da5e5d7))
+* **core:** support local and cloud delivery for product specs ([972d8df](https://github.com/Jonnytoshen/agent-os/commit/972d8df3c1a138703fccc28c6fa6d39de87543fa))
+* **core:** turn product doc handoff into an approval flow ([db0bfb7](https://github.com/Jonnytoshen/agent-os/commit/db0bfb73dabd67aecf71c2aa8322383ada67d28d))
+* dispatch team tasks with a dispatch_task tool ([3f01fdc](https://github.com/Jonnytoshen/agent-os/commit/3f01fdcf88333dd52fa1e044221ee08f5f0b4060))
+* **im:** update product docs from Feishu document comments ([d4e2d79](https://github.com/Jonnytoshen/agent-os/commit/d4e2d79bea67d713a02c1ec5d6da6c3f30f72175))
 ## 0.4.0 (2026-09-02)
 
 ### 🚀 Features

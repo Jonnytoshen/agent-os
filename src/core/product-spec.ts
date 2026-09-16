@@ -6,6 +6,8 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { CollaborationOrigin } from './collaboration';
+
 const WorkspaceDocumentPathSchema = z
   .string()
   .trim()
@@ -62,6 +64,11 @@ export interface ProductSpecFlow {
   sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
+  /**
+   * 产品确认卡点下去以后，产品经理要把“已确认方案”交回 CEO 助理。为了让这一步能自动发生，
+   * `ProductSpecFlow` 需要记住自己来自哪一轮协作。
+   */
+  collaboration?: CollaborationOrigin;
   request: ProductSpecRequest;
   status: 'pending' | 'approved' | 'expired';
   approvedAt?: string;
@@ -73,6 +80,7 @@ export interface CreateProductSpecFlowOptions {
   sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
+  collaboration?: CollaborationOrigin;
   request: ProductSpecRequest;
 }
 

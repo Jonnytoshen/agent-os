@@ -6,6 +6,13 @@ import type { CliAdapter, CliEvent, CliRunResult } from './types';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
+function envTimeoutMs(adapter: CliAdapter): number | undefined {
+  const raw = process.env[`${adapter.id.toUpperCase()}_TIMEOUT_MS`] ?? process.env.CLI_TIMEOUT_MS;
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export interface RunCliOptions {
   adapter: CliAdapter;
   prompt: string;
@@ -23,7 +30,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     cwd,
     sessionId,
     signal,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
+    timeoutMs = envTimeoutMs(adapter) ?? DEFAULT_TIMEOUT_MS,
     onEvent,
   } = options;
   // Windows 下 prompt 走 stdin（规避 cmd 转义/乱码），其他平台直接作为命令行参数。

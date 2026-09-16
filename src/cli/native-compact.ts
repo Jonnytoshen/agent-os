@@ -6,6 +6,13 @@ import type { CliAdapter, CliCompactPlan } from './types';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
+function envTimeoutMs(adapter: CliAdapter): number | undefined {
+  const raw = process.env[`${adapter.id.toUpperCase()}_TIMEOUT_MS`] ?? process.env.CLI_TIMEOUT_MS;
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export interface CompactCliSessionOptions {
   adapter: CliAdapter;
   sessionId: string;
@@ -90,7 +97,7 @@ function runClaudeCompact(
     const abort = () => fail(new Error(`${options.adapter.displayName} 上下文整理已取消`));
     const timer = setTimeout(
       () => fail(new Error(`${options.adapter.displayName} 上下文整理超时`)),
-      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      options.timeoutMs ?? envTimeoutMs(options.adapter) ?? DEFAULT_TIMEOUT_MS,
     );
     options.signal?.addEventListener('abort', abort, { once: true });
 

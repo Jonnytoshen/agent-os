@@ -16,9 +16,8 @@ export interface BotConfig {
   defaultCliId: CliId;
   role: string;
   skills: string[];
-  workspaceDir: string;
   systemPrompt: string;
-  reviewBy?: string;
+  workspaceDir: string;
   collaborationMaxRounds: number;
 }
 
@@ -44,10 +43,6 @@ const BotSchema = z.object({
     .default([]),
   workspace: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().optional().default(''),
-  reviewBy: z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/)
-    .optional(),
   // 把默认上限提高到 16，同时把可配置范围放宽到 1～32。16 是防止失控循环的安全上限，任务已经完成时
   // 仍会立即结束，不会为了凑满次数继续派发。
   collaborationMaxRounds: z.number().int().min(1).max(32).optional().default(16),
@@ -91,26 +86,14 @@ export function parseAgentOSConfig(
         role: bot.role,
         skills: [...new Set(bot.skills)],
         systemPrompt: bot.systemPrompt,
-        reviewBy: bot.reviewBy,
         collaborationMaxRounds: bot.collaborationMaxRounds,
-        workspaceDir: resolveWorkspacePath(
-          bot.workspace ?? env.CLI_WORKDIR ?? env.CLAUDE_WORKDIR ?? '.',
-          baseDirectory,
-        ),
+        workspaceDir: resolveWorkspacePath(bot.workspace ?? env.CLI_WORKDIR ?? '.', baseDirectory),
       };
     });
   if (configs.length === 0) throw new Error('至少需要启用一个 bot');
   const enabledIds = new Set(configs.map((config) => config.id));
   if (!enabledIds.has(parsed.teamLeader)) {
     throw new Error(`teamLeader 指向未启用的 bot: ${parsed.teamLeader}`);
-  }
-  for (const config of configs) {
-    if (config.reviewBy && !enabledIds.has(config.reviewBy)) {
-      throw new Error(`bot ${config.id} 的 reviewBy 指向未启用的 bot: ${config.reviewBy}`);
-    }
-    if (config.reviewBy === config.id) {
-      throw new Error(`bot ${config.id} 不能把自己配置为 reviewBy`);
-    }
   }
   return {
     teamLeaderId: parsed.teamLeader,

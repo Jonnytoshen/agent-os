@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { CollaborationOrigin } from './collaboration';
+
 const OptionSchema = z.object({
   id: z.string().regex(/^[a-z0-9_-]{1,32}$/),
   label: z.string().trim().min(1).max(100),
@@ -75,6 +77,7 @@ export interface ClarificationFlow {
   // ownerOpenId 与 ownerUnionId 用来限制答题人
   ownerOpenId: string;
   ownerUnionId?: string;
+  collaboration?: CollaborationOrigin;
   originalMessageId: string;
   cardMessageId?: string;
   replyInThread: boolean;
@@ -90,6 +93,7 @@ export interface CreateClarificationFlowOptions {
   sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
+  collaboration?: CollaborationOrigin;
   originalMessageId: string;
   cardMessageId?: string;
   replyInThread: boolean;

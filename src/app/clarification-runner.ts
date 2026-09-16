@@ -106,6 +106,9 @@ export async function continueClarificationFlow(options: {
         sessionId: session.id,
         ownerOpenId: flow.ownerOpenId,
         ownerUnionId: flow.ownerUnionId,
+        // 当产品经理先走需求澄清卡（用户在卡片上勾选完提交后），也需要把 `flow.collaboration` 原样
+        // 透传给后续创建的 flow，否则经过澄清交互后协作来源就会断掉
+        collaboration: flow.collaboration,
         originalMessageId: flow.originalMessageId,
         cardMessageId: progressCardMessageId,
         replyInThread: flow.replyInThread,
@@ -165,6 +168,7 @@ export async function continueClarificationFlow(options: {
         sessionId: session.id,
         ownerOpenId: flow.ownerOpenId,
         ownerUnionId: flow.ownerUnionId,
+        collaboration: flow.collaboration,
         request: productSpecRequest,
       });
       await cardUpdater.finish(buildProductSpecApprovalCard(productSpecFlow));

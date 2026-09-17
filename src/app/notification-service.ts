@@ -1,4 +1,4 @@
-import { AgentOSBot, BotIdentity } from '../im/lark';
+import { type AgentOSBot, type BotIdentity } from '../im/lark';
 
 /**
  * 发送结果通知消息，只负责提醒对应的人回来查看。

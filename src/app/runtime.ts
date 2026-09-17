@@ -1,11 +1,11 @@
-import { BotConfig } from '../core/bot-registry';
-import { ClarificationFlowStore } from '../core/clarification';
-import { CollaborationInbox } from '../core/collaboration';
-import { ProductSpecFlowStore } from '../core/product-spec';
-import { SessionManager } from '../core/session-manager';
-import { ActiveRun } from '../core/task-abort';
-import { TeamRegistry } from '../core/team-registry';
-import { AgentOSBot, BotIdentity } from '../im/lark';
+import { type BotConfig } from '../core/bot-registry';
+import { type ClarificationFlowStore } from '../core/clarification';
+import { type CollaborationInbox } from '../core/collaboration';
+import { type ProductSpecFlowStore } from '../core/product-spec';
+import { type SessionManager } from '../core/session-manager';
+import { type ActiveRun } from '../core/task-abort';
+import { type TeamRegistry } from '../core/team-registry';
+import { type AgentOSBot, type BotIdentity } from '../im/lark';
 
 /**
  * Represents a bot that is connected to Feishu (Lark).

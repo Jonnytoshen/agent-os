@@ -20,6 +20,7 @@ export interface RunCliOptions {
   sessionId?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  env?: Record<string, string>;
   onEvent?: (event: CliEvent) => void;
 }
 
@@ -31,6 +32,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     sessionId,
     signal,
     timeoutMs = envTimeoutMs(adapter) ?? DEFAULT_TIMEOUT_MS,
+    env,
     onEvent,
   } = options;
   // Windows 下 prompt 走 stdin（规避 cmd 转义/乱码），其他平台直接作为命令行参数。
@@ -45,6 +47,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     const child = spawnCli(adapter.command, args, {
       cwd,
       signal,
+      env: env ? { ...process.env, ...env } : undefined,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     // stdin 模式下把 prompt 写入子进程；否则 prompt 已在命令行参数里，stdin 直接收口。

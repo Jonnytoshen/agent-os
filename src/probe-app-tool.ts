@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 import { getCliAdapter } from './cli/registry';
 import { runCli } from './cli/runner';
-import { CliId } from './cli/types';
+import { type CliId } from './cli/types';
 import { findClarificationRequest } from './core/clarification';
 
 const cliId = process.argv[2] as CliId | undefined;

@@ -1,5 +1,5 @@
 import { getCliAdapter } from '../cli/registry';
-import { Session, SessionManager } from '../core/session-manager';
+import { type Session, type SessionManager } from '../core/session-manager';
 
 const STATUS_LABELS: Record<Session['status'], string> = {
   creating: '创建中',

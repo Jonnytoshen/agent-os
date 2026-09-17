@@ -4,8 +4,8 @@ import { dirname } from 'node:path';
 import z from 'zod';
 
 import {
-  CreateProductSpecFlowOptions,
-  ProductSpecFlow,
+  type CreateProductSpecFlowOptions,
+  type ProductSpecFlow,
   ProductSpecFlowStore,
   ProductSpecRequestSchema,
 } from './product-spec';

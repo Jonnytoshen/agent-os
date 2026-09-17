@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
-import { BotConfig } from '../core/bot-registry';
-import { CollaborationMessage } from '../core/collaboration';
+import { type BotConfig } from '../core/bot-registry';
+import { type CollaborationMessage } from '../core/collaboration';
 import { buildCollaborationCard } from '../im/card';
-import { AgentOSBot } from '../im/lark';
-import { AgentOSRuntime } from './runtime';
+import { type AgentOSBot } from '../im/lark';
+import { type AgentOSRuntime } from './runtime';
 
 export interface CollaborationDispatch {
   senderConfig: BotConfig;

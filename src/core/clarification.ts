@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
-import { CollaborationOrigin } from './collaboration';
+import { type CollaborationOrigin } from './collaboration';
 
 const OptionSchema = z.object({
   id: z.string().regex(/^[a-z0-9_-]{1,32}$/),

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
-import { CollaborationOrigin } from './collaboration';
+import { type CollaborationOrigin } from './collaboration';
 
 const WorkspaceDocumentPathSchema = z
   .string()

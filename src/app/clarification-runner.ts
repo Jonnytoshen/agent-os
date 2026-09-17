@@ -15,7 +15,7 @@ import {
   splitLongText,
   ThrottledCardUpdater,
 } from '../im/card';
-import { AgentOSBot } from '../im/lark';
+import { type AgentOSBot } from '../im/lark';
 import { executeCli } from './cli-execution';
 import { sendResultNotification } from './notification-service';
 import { assertProductSpecDocuments } from './product-spec-documents';

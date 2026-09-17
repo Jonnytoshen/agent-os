@@ -1,19 +1,31 @@
-import { CliId } from '../cli/types';
+import type { CliId } from '../cli/types';
 
 export type SlashCommand =
   | { name: 'close' | 'status' | 'help' | 'new' | 'resume' | 'team' }
   | { name: 'compact'; instructions?: string }
-  | { name: 'cd'; path?: string };
+  | { name: 'cd'; path?: string }
+  | { name: 'schedules' }
+  | { name: 'schedule'; request?: string };
 
 // 正则表达式用于匹配不同的斜杠命令。
 // 把可选的 bot 名称匹配改成非贪婪形式，让 `@CEO 助理 /team` 这类带空格的显示名可以正常解析。
 const COMMAND_RE = /^(?:@.+?\s+)?\/(close|status|help|new|resume|team)\s*$/;
 const CD_RE = /^(?:@.+?\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
 const COMPACT_RE = /^(?:@.+?\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
+const SCHEDULE_RE = /^(?:@.+?\s+)?\/schedule(?:\s+([\s\S]+?))?\s*$/;
+const SCHEDULES_RE = /^(?:@.+?\s+)?\/schedules\s*$/;
 const CLI_REQUEST_RE = /^(?:@.+?\s+)?\/(claude|codex)(?:\s+([\s\S]*))?$/;
 
 export function parseCommand(text: string): SlashCommand | undefined {
   const value = text.trim();
+
+  // 解析 /schedules 命令
+  if (SCHEDULES_RE.test(value)) return { name: 'schedules' };
+  // 解析 /schedule 命令
+  const scheduleMatch = SCHEDULE_RE.exec(value);
+  if (scheduleMatch) {
+    return { name: 'schedule', request: scheduleMatch[1]?.trim() || undefined };
+  }
 
   // 解析 /cd 命令
   const cdMatch = CD_RE.exec(value);

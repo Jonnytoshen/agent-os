@@ -13,7 +13,7 @@ import {
 } from '../im/card';
 import type { CardAction, CardActionResponse } from '../im/lark';
 import { continueClarificationFlow } from './clarification-runner';
-import { CollaborationService } from './collaboration-service';
+import { type CollaborationService } from './collaboration-service';
 import type { AgentOSRuntime } from './runtime';
 
 /**

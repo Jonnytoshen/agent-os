@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import { CliId } from '../cli/types';
-import { SessionStore } from './session-store';
+import { type CliId } from '../cli/types';
+import { type SessionStore } from './session-store';
 
 export type SessionStatus = 'creating' | 'active' | 'idle' | 'closed';
 

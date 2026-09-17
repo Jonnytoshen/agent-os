@@ -1,6 +1,6 @@
 import { getCliAdapter } from '../cli/registry';
 import type { ProductSpecFlow } from '../core/product-spec';
-import { AgentOSBot, type IncomingDocumentComment } from '../im/lark';
+import { type AgentOSBot, type IncomingDocumentComment } from '../im/lark';
 import { executeCli } from './cli-execution';
 import type { AgentOSRuntime } from './runtime';
 import { markSessionIdle } from './session-view';

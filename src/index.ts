@@ -14,6 +14,9 @@ import { runProductDocumentComment } from './app/product-comment-runner';
 import { assertProductSpecDocuments } from './app/product-spec-documents';
 import { ensureProductSpecSubmission } from './app/product-spec-submission';
 import type { AgentOSBotRuntime, AgentOSRuntime } from './app/runtime';
+import { startScheduleApi } from './app/schedule-api';
+import { startScheduleFileWatcher } from './app/schedule-watcher';
+import { Scheduler } from './app/scheduler';
 import { markSessionIdle } from './app/session-view';
 import { compactCliSession } from './cli/native-compact';
 import { getCliAdapter, listCliAdapters } from './cli/registry';
@@ -34,6 +37,8 @@ import {
 import { parseCliRequest, parseCommand } from './core/command-parser';
 import type { ProductSpecRequest } from './core/product-spec';
 import { JsonProductSpecFlowStore } from './core/product-spec-store';
+import { JsonScheduleRunStore } from './core/schedule-run-store';
+import { JsonScheduleStore } from './core/schedule-store';
 import { SessionManager } from './core/session-manager';
 import { JsonSessionStore } from './core/session-store';
 import type { ActiveRun } from './core/task-abort';
@@ -99,6 +104,15 @@ const runtime: AgentOSRuntime = {
   productSpecFlows,
 };
 const collaborationService = new CollaborationService(runtime);
+const scheduleFilePath = join('data', 'schedules.json');
+const scheduleStore = new JsonScheduleStore(scheduleFilePath);
+const scheduleRunStore = new JsonScheduleRunStore(join('data', 'schedule-runs.json'));
+const scheduler = new Scheduler({
+  runtime,
+  scheduleStore,
+  runStore: scheduleRunStore,
+  defaultProductDeliveryMode: agentOsConfig.defaultProductDeliveryMode,
+});
 
 console.log('Agent OS 启动，正在建立飞书长连接…');
 console.log(
@@ -189,11 +203,21 @@ async function startConfiguredBot(
     }
     const cliAdapter = getCliAdapter(session.cliId);
     const isCompacting = command?.name === 'compact';
-    const taskText = pendingClarification
+    let taskText = pendingClarification
       ? formatClarificationMessage(pendingClarification, cliRequest?.prompt ?? resolved)
       : collaboration
         ? buildCollaborationPrompt(collaboration)
         : (cliRequest?.prompt ?? resolved);
+
+    // `/schedule` 后面的自然语言先变成一条让模型使用工具的任务文本
+    if (command?.name === 'schedule' && command.request) {
+      taskText = [
+        '用户想创建一个定时任务。',
+        `需求：${command.request}`,
+        '请使用 schedule_manage 工具，action=add 创建：targetBotId 选择团队中合适的成员，prompt 保留完整需求，rule 根据需求选择合适的调度规则。',
+      ].join('\n\n');
+    }
+
     const prompt = buildBotPrompt(config, taskText, teamRegistry.contextFor(config.id));
     const taskCardTitle = isCompacting ? '整理上下文' : cliAdapter.displayName;
 
@@ -209,6 +233,7 @@ async function startConfiguredBot(
 
     const commandOutcome = await handleSessionCommand({
       runtime,
+      scheduler,
       config,
       msg,
       bot,
@@ -321,6 +346,17 @@ async function startConfiguredBot(
     const progressHeartbeat = setInterval(renderProgress, 1_000);
     progressHeartbeat.unref();
 
+    /**
+     * MCP 子进程如何拿到会话上下文
+     *
+     * `schedule_manage` 创建任务时需要知道任务属于哪个话题、发起人是谁。MCP 是 CLI 子进程，不能直接
+     * 拿到主进程的 SessionManager，所以 Agent OS 在启动 CLI 时通过环境变量把上下文传进去。
+     */
+    const cliEnv = {
+      AGENT_OS_CHAT_ID: msg.chatId,
+      AGENT_OS_OWNER_OPEN_ID: collaboration?.ownerOpenId ?? msg.senderOpenId,
+    };
+
     // 让事件回调尽快返回，CLI 在后台继续执行。
     const execution = isCompacting
       ? compactCliSession({
@@ -351,6 +387,7 @@ async function startConfiguredBot(
             progress.accept(event);
             renderProgress();
           },
+          cliEnv,
         );
 
     void execution
@@ -766,3 +803,14 @@ function rememberDocumentCommentEvent(eventKey: string): void {
 }
 
 await Promise.all(botConfigs.map((config) => startConfiguredBot(config, collaborationService)));
+
+// 启动定时任务调度器和 API 服务
+await scheduler.start();
+startScheduleFileWatcher({ scheduler, filePath: scheduleFilePath });
+startScheduleApi({
+  scheduler,
+  scheduleStore,
+  runStore: scheduleRunStore,
+  port: Number(process.env.SCHEDULE_API_PORT ?? 3101),
+  token: process.env.SCHEDULE_API_TOKEN,
+});

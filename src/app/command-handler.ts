@@ -5,9 +5,15 @@ import type { BotConfig } from '../core/bot-registry';
 import type { CliRequest, SlashCommand } from '../core/command-parser';
 import type { Session } from '../core/session-manager';
 import { ensureWorkspaceDirectory, resolveWorkspacePath } from '../core/workspace';
-import { buildResumeCard, buildSessionNoticeCard, buildTeamCard } from '../im/card';
+import {
+  buildResumeCard,
+  buildScheduleListCard,
+  buildSessionNoticeCard,
+  buildTeamCard,
+} from '../im/card';
 import type { AgentOSBot, IncomingMessage } from '../im/lark';
 import type { AgentOSRuntime } from './runtime';
+import { type Scheduler } from './scheduler';
 import { formatSessionStatus } from './session-view';
 
 export type CommandOutcome = 'handled' | 'continue';
@@ -21,6 +27,7 @@ export type CommandOutcome = 'handled' | 'continue';
  */
 export async function handleSessionCommand(options: {
   runtime: AgentOSRuntime;
+  scheduler: Scheduler;
   config: BotConfig;
   msg: IncomingMessage;
   bot: AgentOSBot;
@@ -31,8 +38,19 @@ export async function handleSessionCommand(options: {
   isNew: boolean;
   hasThread: boolean;
 }): Promise<CommandOutcome> {
-  const { runtime, config, msg, bot, session, cliAdapter, command, cliRequest, isNew, hasThread } =
-    options;
+  const {
+    runtime,
+    scheduler,
+    config,
+    msg,
+    bot,
+    session,
+    cliAdapter,
+    command,
+    cliRequest,
+    isNew,
+    hasThread,
+  } = options;
 
   if (!isNew && cliRequest && cliRequest.cliId !== session.cliId) {
     await bot.reply(
@@ -49,6 +67,12 @@ export async function handleSessionCommand(options: {
       [
         '/status 查看当前会话',
         '/team 查看当前 Agent 团队',
+        '/schedule <需求> 创建定时任务',
+        '/schedules 查看定时任务',
+        '/schedule pause <id> 暂停定时任务',
+        '/schedule resume <id> 恢复定时任务',
+        '/schedule delete <id> 删除定时任务',
+        '/schedule run <id> 立即执行定时任务',
         '/new 开启一个全新的 CLI 会话',
         '/resume 选择当前工作目录中的 CLI 会话',
         '/compact [要求] 使用当前引擎原生整理上下文',
@@ -84,6 +108,69 @@ export async function handleSessionCommand(options: {
       hasThread,
     );
     return 'handled';
+  }
+
+  if (command?.name === 'schedules') {
+    await bot.replyCard(msg.messageId, buildScheduleListCard(scheduler.list()), hasThread);
+    return 'handled';
+  }
+
+  if (command?.name === 'schedule' && !command.request) {
+    await bot.reply(
+      msg.messageId,
+      [
+        '用法：/schedule <需求>',
+        '例如：/schedule 每小时检查一次服务日志',
+        '管理：/schedules、/schedule pause <id>、/schedule resume <id>、/schedule delete <id>、/schedule run <id>',
+      ].join('\n'),
+      hasThread,
+    );
+    return 'handled';
+  }
+
+  if (command?.name === 'schedule' && command.request) {
+    const request = command.request;
+    const pause = /^pause\s+([a-z0-9_-]+)$/i.exec(request);
+    const resume = /^resume\s+([a-z0-9_-]+)$/i.exec(request);
+    const remove = /^delete\s+([a-z0-9_-]+)$/i.exec(request);
+    const run = /^run\s+([a-z0-9_-]+)$/i.exec(request);
+    if (pause) {
+      const task = scheduler.pause(pause[1]);
+      await bot.reply(
+        msg.messageId,
+        task ? `定时任务 ${task.id} 已暂停。` : '没有找到这个定时任务。',
+        hasThread,
+      );
+      return 'handled';
+    }
+    if (resume) {
+      const task = scheduler.resume(resume[1]);
+      await bot.reply(
+        msg.messageId,
+        task ? `定时任务 ${task.id} 已恢复。` : '没有找到这个定时任务。',
+        hasThread,
+      );
+      return 'handled';
+    }
+    if (remove) {
+      const deleted = scheduler.delete(remove[1]);
+      await bot.reply(
+        msg.messageId,
+        deleted ? `定时任务 ${remove[1]} 已删除。` : '没有找到这个定时任务。',
+        hasThread,
+      );
+      return 'handled';
+    }
+    if (run) {
+      const task = await scheduler.runNow(run[1]);
+      await bot.reply(
+        msg.messageId,
+        task ? `定时任务 ${task.id} 已触发执行。` : '没有找到这个定时任务。',
+        hasThread,
+      );
+      return 'handled';
+    }
+    return 'continue';
   }
 
   if (command?.name === 'new') {

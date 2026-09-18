@@ -11,6 +11,26 @@ import type { TaskActivity, TaskProgressSnapshot } from '../core/task-progress';
 export type CardJson = Record<string, unknown>;
 export type TaskStatus = 'running' | 'success' | 'failed' | 'cancelled';
 
+/**
+ * 格式化调度时间为本地化（`Asia/Shanghai`）的日期和时间字符串。
+ * @param value ISO 8601 格式的日期时间字符串
+ * @returns 格式化后的日期时间字符串，如果输入无效则返回原始值
+ */
+function formatScheduleTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
 export interface TaskCardOptions {
   title: string;
   status: TaskStatus;
@@ -678,7 +698,9 @@ export function buildScheduleCreatedCard(task: ScheduledTask): CardJson {
             `**任务编号** \`${task.id}\``,
             `**执行内容**\n${escapeFeishuMarkdown(task.prompt)}`,
             `**调度规则** ${scheduleKindLabel(task.rule)} · ${escapeFeishuMarkdown(scheduleDescription(task.rule))}`,
-            task.nextRunAt ? `**下一次执行** ${escapeFeishuMarkdown(task.nextRunAt)}` : '',
+            task.nextRunAt
+              ? `**下一次执行** ${escapeFeishuMarkdown(formatScheduleTime(task.nextRunAt))} (Asia/Shanghai)`
+              : '',
           ]
             .filter(Boolean)
             .join('\n\n'),
@@ -696,6 +718,9 @@ export function buildScheduleListCard(tasks: ScheduledTask[]): CardJson {
             `**${task.id}** · ${task.status}`,
             `${escapeFeishuMarkdown(task.prompt.slice(0, 80))}`,
             `${scheduleKindLabel(task.rule)} · ${escapeFeishuMarkdown(scheduleDescription(task.rule))} · 交给 ${task.targetBotId}`,
+            task.nextRunAt
+              ? `下一次执行 ${escapeFeishuMarkdown(formatScheduleTime(task.nextRunAt))} (Asia/Shanghai)`
+              : '下一次执行 未计算',
           ].join('\n'),
         )
         .join('\n\n')

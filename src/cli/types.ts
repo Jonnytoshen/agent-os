@@ -50,6 +50,7 @@ export type CliEvent =
     }
   | { type: 'tool_end'; toolUseId: string; failed: boolean }
   | { type: 'context'; usedTokens: number }
+  | { type: 'stats'; stats: CliRunStats }
   | {
       type: 'tool_call';
       toolUseId: string;

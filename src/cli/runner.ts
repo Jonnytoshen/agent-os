@@ -105,6 +105,13 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
           observedToolCalls.delete(event.toolUseId);
           continue;
         }
+        if (event.type === 'stats') {
+          observedStats = event.stats;
+          if (finalResult && !finalResult.stats) {
+            finalResult.stats = event.stats;
+          }
+          continue;
+        }
         if (event.type === 'result') {
           if (event.answer) observedAnswer = event.answer;
           if (event.stats) observedStats = event.stats;

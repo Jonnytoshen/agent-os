@@ -4,7 +4,14 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "rules": {
+    "typescript/consistent-type-imports": [
+      "error",
+      {
+        "fixStyle": "inline-type-imports"
+      }
+    ]
+  },
   "env": {
     "builtin": true
   }

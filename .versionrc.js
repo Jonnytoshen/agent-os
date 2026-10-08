@@ -22,6 +22,7 @@ export default {
   releaseCommitMessageFormat: 'chore(release): v{{currentTag}}',
   tagPrefix: 'v',
   writerOpts: {
+    commitsSort: false,
     finalizeContext(context) {
       if (Array.isArray(context.noteGroups)) {
         for (const noteGroup of context.noteGroups) {

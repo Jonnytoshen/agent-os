@@ -21,6 +21,8 @@ pnpm start（watch 模式）/ pnpm start:once（单次启动）
 
 This repository enforces its commit convention with commitlint.
 
+- Write commit messages in English (subject and body). Only use Chinese when the user explicitly
+  asks for it in that request.
 - Read the rules before committing: `pnpm commitlint --print-config json`
 - Validate a message before using it: `printf '%s' "<message>" | pnpm commitlint`
   (exit 0 = valid)
